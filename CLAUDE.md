@@ -50,5 +50,5 @@ DH의 개인 업무 허브 웹앱 **Steward**. 태그라인 "A daily rhythm for 
 2. ✅ 해시 라우팅 + 날짜 변경 처리
 3. ✅ 체크인 화면 3종 (`docs/checkin-design.md`) — `#/checkin/morning|midday|evening|evening_final?d=`, `#/review?d=`, `daily_reviews` + `save_daily_review` (002)
 4. ✅ PWA + 서비스 워커 — `manifest.webmanifest`, `sw.js` (셸 네트워크 우선 캐시, 푸시 표시, 알림 누름 → 열린 앱에 `steward:open` 메시지)
-5. push_subscriptions / notification_log / Cron / Edge Function
+5. ⏳ push_subscriptions / notification_log / Cron / Edge Function — 설계안 교차검토 중 (`docs/notifications-impl.md`, 003·004 초안은 **실제 Supabase에 아직 실행 안 함**). 로컬 스택은 `*_cron.sql`을 건너뜀
 6. 실제 기기 테스트
