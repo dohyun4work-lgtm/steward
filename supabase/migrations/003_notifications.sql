@@ -1,5 +1,5 @@
 -- =====================================================================
--- Steward 003 — 체크인 알림: 시간표·설정·기기 구독·발송 기록  (설계안, 교차검토 전 · 실행 금지)
+-- Steward 003 — 체크인 알림: 시간표·설정·기기 구독·발송 기록  (교차검토 반영 v2)
 -- 설계: docs/checkin-design.md v2 (2번 테이블, 5번 설정, 7번 중복 방지·만료·재시도)
 --
 -- 역할 분리
@@ -140,7 +140,9 @@ begin
   end if;
 end; $$;
 
--- 이 기기 구독 등록 (같은 endpoint면 갱신 · 다시 켬). 다른 계정이 쓰던 endpoint면 이 계정으로 옮김(같은 기기에서 계정 전환)
+-- 이 기기 구독 등록 (같은 endpoint면 갱신 · 다시 켬)
+-- 구독 이전 정책: 다른 계정이 쓰던 endpoint(같은 기기)를 등록하면 이 계정으로 옮김 → 이전 계정은 그 기기로 알림을 받지 않음
+--   개인용 MVP 정책. 자세한 내용: docs/notifications-impl.md 1-1
 create or replace function public.register_push_subscription(p_endpoint text, p_p256dh text, p_auth text, p_label text default null)
 returns uuid language plpgsql security definer set search_path = '' as $$
 declare v_uid uuid := (select auth.uid()); v_id uuid;
