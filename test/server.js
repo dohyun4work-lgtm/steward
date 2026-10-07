@@ -10,6 +10,12 @@ const anon = jwt.sign({ role: 'anon' }, SECRET, { expiresIn: '2h' });
 const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png' };
 http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
+  if (url.pathname.startsWith('/functions/v1/')) {   // 로컬에서 띄운 Edge Function (Deno, 8000)
+    const r = await fetch('http://127.0.0.1:8000' + url.pathname.replace(/^\/functions\/v1\/[^/]+/, '') + url.search, { method: req.method }).catch(() => null);
+    if (!r) { res.writeHead(502); return res.end(); }
+    const h = {}; r.headers.forEach((v, k) => { if (!['content-encoding', 'transfer-encoding', 'content-length'].includes(k)) h[k] = v; });
+    res.writeHead(r.status, h); return res.end(Buffer.from(await r.arrayBuffer()));
+  }
   if (url.pathname.startsWith('/rest/v1/')) {
     const chunks = []; for await (const c of req) chunks.push(c);
     const headers = { ...req.headers }; delete headers.host; delete headers['content-length'];

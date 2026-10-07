@@ -312,14 +312,15 @@ function renderArchive() {
     if (items.length) html += `<p class="foot-note">초록 체크를 누르면 완료가 취소돼요. 최근 ${DONE_DAYS}일만 보여요.</p>`;
   }
   html += installHintHTML();
-  html += `<div class="foot-note"><span class="account">${esc(userEmail)}<span class="brandline">Steward · A daily rhythm for faithful work.</span></span><button class="btn" data-act="signout">로그아웃</button></div>`;
+  html += `<div class="foot-note"><span class="account">${esc(userEmail)}<span class="brandline">Steward · A daily rhythm for faithful work.</span></span><span class="foot-actions"><button class="btn" data-act="settings">알림 설정</button><button class="btn" data-act="signout">로그아웃</button></span></div>`;
   main.innerHTML = html;
 }
 
 function render() {
   if (document.body.classList.contains('signed-out')) return;
-  ({ today: renderToday, inbox: renderInbox, waiting: renderWaiting, archive: renderArchive })[ui.tab]();
-  document.querySelectorAll('.nav [data-tab]').forEach(b => { if (b.dataset.tab === ui.tab) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); });
+  ({ today: renderToday, inbox: renderInbox, waiting: renderWaiting, archive: renderArchive, settings: renderSettings })[ui.tab]();
+  const navTab = ui.tab === 'settings' ? 'archive' : ui.tab;   // 설정은 보관 탭 아래
+  document.querySelectorAll('.nav [data-tab]').forEach(b => { if (b.dataset.tab === navTab) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); });
   const n = inbox().length, badge = document.getElementById('inboxBadge');
   badge.textContent = n; badge.hidden = !n;
   showSave(true);
@@ -334,6 +335,7 @@ const ROUTES = {
   '/waiting':      { tab: 'waiting' },
   '/archive':      { tab: 'archive', archMode: 'later' },
   '/archive/done': { tab: 'archive', archMode: 'done' },
+  '/settings':     { tab: 'settings' },
 };
 const pathOf = () => (location.hash.replace(/^#/, '').split('?')[0] || '/today');
 const paramsOf = () => new URLSearchParams(location.hash.split('?')[1] || '');
@@ -351,6 +353,7 @@ function applyRoute() {
   if (!r) { history.replaceState(null, '', '#/today'); Object.assign(ui, ROUTES['/today']); }
   else Object.assign(ui, r);
   if (sheetKind === 'checkin' || sheetKind === 'review') closeSheet();
+  if (ui.tab === 'settings') settings.loaded = false;   // 들어올 때마다 최신으로
   render();
 }
 // replace: 같은 화면 안의 보기 전환(오늘/이번 주, 나중에/완료)은 뒤로 가기 기록을 남기지 않음
@@ -662,6 +665,9 @@ const leaveCheckin = () => { if (/^#\/(checkin|review)/.test(location.hash)) his
 function applyCheckinRoute(path) {
   const today = T();
   let d = paramsOf().get('d');
+  const n = paramsOf().get('n');
+  ui.checkinLog = /^[0-9a-f-]{36}$/.test(n || '') ? n : null;
+  if (ui.checkinLog) markCheckin('opened');
   if (!/^\d{4}-\d{2}-\d{2}$/.test(d || '') || d > today) d = today;
   Object.assign(ui, ROUTES['/today']);
   if (!sheet.hidden) { sheetClose = null; closeSheet(); }   // 이전 시트의 '주소 되돌리기'가 새 주소를 덮지 않게
@@ -696,7 +702,7 @@ function morningCardHTML() {
     <div class="cc-actions"><button class="btn primary" data-act="cc-add">＋ 추가</button><button class="btn ghost" data-act="cc-close">닫기</button></div>
   </section>`;
 }
-function dismissMorning() { ui.morningCard = false; leaveCheckin(); render(); }
+function dismissMorning() { ui.morningCard = false; markCheckin('completed'); leaveCheckin(); render(); }
 
 // 12:00 · 15:00 중간 체크
 function openMidday() {
@@ -719,7 +725,7 @@ function openMidday() {
       await insertTask({ title, status: 'active', do_date: T() });
       if (sheetKind === 'checkin') draw(true);
     });
-    sheet.querySelector('#ciDone').addEventListener('click', () => { closeSheet(); toast('중간 체크 완료'); });
+    sheet.querySelector('#ciDone').addEventListener('click', () => { markCheckin('completed'); closeSheet(); toast('중간 체크 완료'); });
     sheet.onclick = async e => {
       const row = e.target.closest('.row'); if (!row) return;
       const id = row.dataset.id;
@@ -741,7 +747,7 @@ function openEvening() {
   const alive = id => { const t = byId(id); return t && !t.deleted_at && t.status !== 'done'; };
   const step = () => {
     while (queue.length && (handled.has(queue[0]) || !alive(queue[0]))) queue.shift();
-    if (!queue.length) { closeSheet(); return toast(kept ? `저녁 재조정 끝 · 오늘 ${kept}개 남김` : '저녁 재조정 끝'); }
+    if (!queue.length) { markCheckin('completed'); closeSheet(); return toast(kept ? `저녁 재조정 끝 · 오늘 ${kept}개 남김` : '저녁 재조정 끝'); }
     const t = byId(queue[0]);
     openSheet(`<div class="ci-head"><h2>저녁 재조정</h2><span class="progress">${total - queue.length + 1} / ${total}</span></div>
       <p class="ci-sub">오늘 안에 할 수 있나요?</p>
@@ -776,6 +782,7 @@ function openEveningFinal() {
     const rem = remainingOn(today).filter(t => !handled.has(t.id)), doneN = doneOn(today).length;
     const keep = sheet.hidden ? 0 : sheet.scrollTop;
     if (!rem.length) {
+      markCheckin('completed');
       return openSheet(`<h2>오늘 마무리</h2><div class="empty-big"><b>오늘 마무리 완료</b>완료 ${doneN}개 · 23시에 하루를 1분만 돌아봐요.</div>
         <div class="sheet-foot"><span></span><button class="btn primary" data-close>닫기</button></div>`, leaveCheckin, 'checkin');
     }
@@ -783,9 +790,10 @@ function openEveningFinal() {
       <p class="ci-sub">남은 업무를 넘기고 오늘을 마무리해요.</p>
       <div class="list ci-list">${rem.map(t => rowHTML(t, { noswipe: true, extra: finalActions })).join('')}</div>
       <div class="ci-stack"><button class="btn primary" data-fin="all">남은 ${rem.length}개 모두 내일로</button></div>
-      <button class="more-toggle" data-close>오늘 밤에 끝낼 거예요 ›</button>`, leaveCheckin, 'checkin');
+      <button class="more-toggle" data-close data-fin-later>오늘 밤에 끝낼 거예요 ›</button>`, leaveCheckin, 'checkin');
     sheet.scrollTop = keep;
     sheet.onclick = async e => {
+      if (e.target.closest('[data-fin-later]')) return markCheckin('completed');
       const b = e.target.closest('[data-fin]');
       if (b?.dataset.fin === 'all') { sheet.onclick = null; return confirmMoveAll(rem.map(t => t.id), today, draw, handled); }
       const row = e.target.closest('.row'); if (!row) return;
@@ -883,6 +891,7 @@ function openReview(d, st = { note: null, top: undefined, newTitle: '' }) {
       unwrap(await track(db.rpc('save_daily_review', { p_date: d, p_note: st.note.trim() || null, p_top_task_id: newTitle ? null : st.top, p_new_title: newTitle || null })));
       await loadAll();
       closeSheet();
+      markCheckin('completed');
       toast('하루 복기를 저장했어요');
     } catch (err) { btn.disabled = false; saveError(err); }
   });
@@ -898,6 +907,196 @@ function openReview(d, st = { note: null, top: undefined, newTitle: '' }) {
     openDetail(id, redraw);
   };
 }
+
+// ---------- 알림 설정 (#/settings) · 기기 구독 ----------
+const KIND_LABEL = { morning: '아침 · 오늘 할 일', midday: '중간 체크', evening: '저녁 재조정', evening_final: '오늘 마무리', review: '하루 복기' };
+const DAY_CHIPS = [[1, '월'], [2, '화'], [3, '수'], [4, '목'], [5, '금'], [6, '토'], [0, '일']];
+const SUB_KEY = 'steward.push.subscriptionId';
+const store = { get: k => { try { return localStorage.getItem(k); } catch (_) { return null; } }, set: (k, v) => { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch (_) {} } };
+const settings = { loaded: false, loading: false, slots: [], prefs: null, devices: [], device: 'unknown', busy: false, openSlot: null };
+const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+const deviceLabel = () => /iPhone/.test(navigator.userAgent) ? 'iPhone' : /iPad/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1) ? 'iPad'
+  : /Android/.test(navigator.userAgent) ? 'Android' : /Mac/.test(navigator.platform) ? 'Mac' : /Win/.test(navigator.platform) ? 'Windows PC' : '이 기기';
+const daysText = w => { const s = [...w].sort().join(); return s === '0,1,2,3,4,5,6' ? '매일' : s === '1,2,3,4,5' ? '평일' : s === '0,6' ? '주말' : DAY_CHIPS.filter(([n]) => w.includes(n)).map(([, l]) => l).join(''); };
+const b64ToBytes = b64 => { const p = '='.repeat((4 - b64.length % 4) % 4); const raw = atob((b64 + p).replace(/-/g, '+').replace(/_/g, '/')); return Uint8Array.from(raw, c => c.charCodeAt(0)); };
+
+function markCheckin(what) {
+  const id = ui.checkinLog; if (!id) return;
+  if (what === 'completed') ui.checkinLog = null;
+  db.rpc('mark_checkin', { p_log_id: id, p_what: what }).then(r => { if (r.error) console.error('[taskhub] mark', r.error); });
+}
+
+async function vapidPublicKey() {
+  const cached = store.get('steward.vapidPublicKey'); if (cached) return cached;
+  const r = await fetch(`${CFG.supabaseUrl}/functions/v1/send-checkins?vapid=public`);
+  if (!r.ok) throw new Error('vapid ' + r.status);
+  const { publicKey } = await r.json();
+  store.set('steward.vapidPublicKey', publicKey);
+  return publicKey;
+}
+async function currentBrowserSub() {
+  if (!pushSupported()) return null;
+  const reg = await navigator.serviceWorker.getRegistration(); if (!reg) return null;
+  return reg.pushManager.getSubscription();
+}
+async function registerSub(sub) {
+  const j = sub.toJSON();
+  const id = unwrap(await track(db.rpc('register_push_subscription', { p_endpoint: j.endpoint, p_p256dh: j.keys.p256dh, p_auth: j.keys.auth, p_label: deviceLabel() })));
+  store.set(SUB_KEY, id);
+  return id;
+}
+// 이 기기 상태: unsupported | ios-browser | denied | on | off
+async function detectDevice() {
+  if (isIOS() && !isStandalone()) return 'ios-browser';
+  if (!pushSupported()) return 'unsupported';
+  if (Notification.permission === 'denied') return 'denied';
+  const sub = await currentBrowserSub();
+  return sub && store.get(SUB_KEY) ? 'on' : 'off';
+}
+async function subscribeThisDevice() {
+  // 권한 요청은 버튼을 눌렀을 때만
+  const perm = await Notification.requestPermission();
+  if (perm !== 'granted') { settings.device = perm === 'denied' ? 'denied' : 'off'; return render(); }
+  const reg = await navigator.serviceWorker.ready;
+  let sub = await reg.pushManager.getSubscription();
+  if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(await vapidPublicKey()) });
+  await registerSub(sub);
+  if (settings.prefs && !settings.prefs.enabled) await setPrefs(true);
+}
+async function unsubscribeThisDevice() {
+  const id = store.get(SUB_KEY);
+  if (id) { await db.rpc('remove_push_subscription', { p_id: id }); store.set(SUB_KEY, null); }
+  const sub = await currentBrowserSub(); if (sub) await sub.unsubscribe();
+}
+// 앱을 열 때 이 기기 구독을 서버와 맞춤 (주소가 바뀌었거나 만료 처리됐어도 다시 활성)
+async function syncThisDevice() {
+  try { if (Notification.permission !== 'granted') return; const sub = await currentBrowserSub(); if (sub) await registerSub(sub); } catch (_) {}
+}
+
+async function loadSettings() {
+  if (settings.loading) return; settings.loading = true;
+  try {
+    unwrap(await db.rpc('ensure_default_slots'));
+    const [slots, prefs, devices] = await Promise.all([
+      db.from('checkin_slots').select('id,kind,local_time,weekdays,enabled').order('local_time'),
+      db.from('notification_prefs').select('enabled').maybeSingle(),
+      db.from('push_subscriptions').select('id,device_label,created_at,last_success_at,disabled_at').order('created_at'),
+    ]);
+    settings.slots = unwrap(slots).map(x => { const r = { ...x, local_time: x.local_time.slice(0, 5) }; r._saved = { local_time: r.local_time, weekdays: r.weekdays, enabled: r.enabled }; return r; });
+    settings.prefs = unwrap(prefs) || { enabled: true };
+    settings.devices = unwrap(devices);
+    settings.device = await detectDevice();
+    settings.loaded = true;
+  } catch (e) { console.error('[taskhub] settings', e); settings.error = true; }
+  finally { settings.loading = false; }
+  if (ui.tab === 'settings') render();
+}
+async function setPrefs(enabled) {
+  const prev = settings.prefs.enabled; settings.prefs.enabled = enabled; render();
+  try { unwrap(await track(db.from('notification_prefs').update({ enabled }).not('user_id', 'is', null).select())); }   // 보안 규칙상 본인 행만 바뀜
+  catch (e) { settings.prefs.enabled = prev; render(); saveError(e); }
+}
+// 실패하면 '서버가 마지막으로 확인한 값'(_saved)으로 되돌림 → 저장이 겹쳐도 화면 값만 믿고 되돌리지 않음
+async function updateSlot(id, fields, revertMsg) {
+  const slot = settings.slots.find(x => x.id === id);
+  Object.assign(slot, fields); render();
+  try {
+    const row = unwrap(await track(db.from('checkin_slots').update(fields).eq('id', id).select('id,kind,local_time,weekdays,enabled').single()));
+    Object.assign(slot, row, { local_time: row.local_time.slice(0, 5) });
+    slot._saved = { local_time: slot.local_time, weekdays: slot.weekdays, enabled: slot.enabled };
+    settings.slots.sort((a, b) => a.local_time.localeCompare(b.local_time)); render();
+  } catch (e) {
+    Object.assign(slot, slot._saved); settings.slots.sort((a, b) => a.local_time.localeCompare(b.local_time)); render();
+    if (e.code === '23505' || /checkin_slots_time_uniq|duplicate/i.test(e.message || '')) toast('같은 시각의 알림이 이미 있어요'); else if (revertMsg) toast(revertMsg); else saveError(e);
+  }
+}
+
+function renderSettings() {
+  header('알림 설정', 'Steward 체크인');
+  if (!settings.loaded) {
+    main.innerHTML = settings.error ? `<div class="empty-big"><b>불러오지 못했어요</b>연결을 확인하고 다시 열어 주세요.</div>` : `<div class="loading">불러오는 중…</div>`;
+    if (!settings.loading && !settings.error) loadSettings();
+    return;
+  }
+  const thisId = store.get(SUB_KEY);
+  const others = settings.devices.filter(d => d.id !== thisId);
+  const dev = settings.device;
+  const deviceHTML = {
+    'ios-browser': `<p class="set-note">iPhone은 <b>홈 화면에 추가한 Steward 앱</b>에서만 알림을 켤 수 있어요.<br>Safari 공유 버튼 → 홈 화면에 추가 → 홈 화면 아이콘으로 열기</p>`,
+    unsupported: `<p class="set-note">이 브라우저는 알림을 지원하지 않아요.</p>`,
+    denied: `<p class="set-note">알림이 차단되어 있어요. 기기 설정 → 알림 → Steward(또는 브라우저)에서 허용한 뒤 다시 열어 주세요.</p>`,
+    off: `<p class="set-note">이 기기에서는 알림이 꺼져 있어요.</p><button class="btn primary" data-set="sub-on" ${settings.busy ? 'disabled' : ''}>이 기기에서 알림 켜기</button>`,
+    on: `<p class="set-note">이 기기(${esc(deviceLabel())})에서 알림을 받고 있어요.</p>
+         <div class="set-btns"><button class="btn" data-set="preview">알림 모양 확인</button><button class="btn" data-set="sub-off" ${settings.busy ? 'disabled' : ''}>이 기기 알림 끄기</button></div>`,
+    unknown: '',
+  }[dev];
+  main.innerHTML = `
+    <section class="set-sec">
+      <label class="set-row"><span><b>전체 알림</b><small>끄면 모든 기기에서 체크인 알림을 보내지 않아요</small></span>
+        <input type="checkbox" class="switch" id="setAll" role="switch" ${settings.prefs.enabled ? 'checked' : ''}></label>
+    </section>
+    <section class="set-sec"><h2 class="sec-h">이 기기</h2><div class="set-card">${deviceHTML}</div></section>
+    ${others.length ? `<section class="set-sec"><h2 class="sec-h">다른 기기 <span class="n">${others.length}</span></h2><div class="list">${others.map(d => `
+      <div class="set-dev"><span><b>${esc(d.device_label || '기기')}</b><small>${d.disabled_at ? '꺼짐 · 구독이 만료됐어요' : d.last_success_at ? `마지막 수신 ${md(seoulDate(new Date(d.last_success_at)))}` : `등록 ${md(seoulDate(new Date(d.created_at)))}`}</small></span>
+        <button class="btn ghost danger" data-set="dev-del" data-id="${d.id}">삭제</button></div>`).join('')}</div></section>` : ''}
+    <section class="set-sec"><h2 class="sec-h">알림 시간</h2><div class="list">${settings.slots.map(sl => `
+      <details class="set-slot ${sl.enabled ? '' : 'off'}" data-id="${sl.id}" ${settings.openSlot === sl.id ? 'open' : ''}>
+        <summary><span class="set-time">${sl.local_time}</span><span class="set-kind"><b>${KIND_LABEL[sl.kind]}</b><small>${daysText(sl.weekdays)}</small></span>
+          <input type="checkbox" class="switch" role="switch" aria-label="${KIND_LABEL[sl.kind]} ${sl.local_time} 켜기" data-set="slot-on" ${sl.enabled ? 'checked' : ''}></summary>
+        <div class="set-slot-body">
+          <label class="lbl" for="t-${sl.id}">시간</label>
+          <input type="time" class="input set-time-input" id="t-${sl.id}" step="300" max="23:35" value="${sl.local_time}" data-set="slot-time">
+          <span class="lbl">요일</span>
+          <div class="chips">${DAY_CHIPS.map(([n, l]) => `<button class="chip" data-set="slot-day" data-day="${n}" aria-pressed="${sl.weekdays.includes(n)}">${l}</button>`).join('')}</div>
+        </div>
+      </details>`).join('')}</div>
+      <p class="foot-note">시간은 5분 단위, 23:35까지. 바꾸면 바로 저장돼요.</p></section>`;
+}
+
+// 설정 화면 입력 처리
+// 펼친 시간 행은 저장 후 다시 그려도 펼친 채로
+main.addEventListener('toggle', e => {
+  if (ui.tab !== 'settings' || !e.target.matches?.('.set-slot')) return;
+  if (e.target.open) settings.openSlot = e.target.dataset.id; else if (settings.openSlot === e.target.dataset.id) settings.openSlot = null;
+}, true);
+main.addEventListener('change', e => {
+  if (ui.tab !== 'settings') return;
+  if (e.target.id === 'setAll') return setPrefs(e.target.checked);
+  const slotEl = e.target.closest('.set-slot'); if (!slotEl) return;
+  const id = slotEl.dataset.id;
+  if (e.target.dataset.set === 'slot-on') return updateSlot(id, { enabled: e.target.checked });
+  if (e.target.dataset.set === 'slot-time') {
+    const v = e.target.value; const [h, m] = v.split(':').map(Number);
+    if (!v || m % 5 || v > '23:35') { toast('5분 단위, 23:35까지 고를 수 있어요'); return render(); }
+    return updateSlot(id, { local_time: v }, '시간을 바꾸지 못했어요');
+  }
+});
+main.addEventListener('click', async e => {
+  if (ui.tab !== 'settings') return;
+  if (e.target.closest('summary') && e.target.matches('input.switch')) { e.stopPropagation(); return; }   // 스위치는 펼치지 않음
+  const b = e.target.closest('[data-set]'); if (!b || b.matches('input')) return;
+  const k = b.dataset.set;
+  if (k === 'slot-day') {
+    const sl = settings.slots.find(x => x.id === b.closest('.set-slot').dataset.id); const day = Number(b.dataset.day);
+    const next = sl.weekdays.includes(day) ? sl.weekdays.filter(x => x !== day) : [...sl.weekdays, day].sort();
+    if (!next.length) return toast('요일은 하나 이상 골라야 해요');
+    return updateSlot(sl.id, { weekdays: next });
+  }
+  if (k === 'sub-on' || k === 'sub-off') {
+    settings.busy = true; render();
+    try { if (k === 'sub-on') await subscribeThisDevice(); else await unsubscribeThisDevice(); toast(k === 'sub-on' ? '이 기기에서 알림을 받아요' : '이 기기 알림을 껐어요'); }
+    catch (err) { console.error('[taskhub] push', err); toast(k === 'sub-on' ? '알림을 켜지 못했어요 · 잠시 후 다시 시도해 주세요' : '알림을 끄지 못했어요'); }
+    settings.busy = false; settings.loaded = false; return loadSettings();
+  }
+  if (k === 'preview') {
+    const reg = await navigator.serviceWorker.ready;
+    return reg.showNotification('Steward', { body: '남은 업무 3개 · 오늘 안에 할 것만 남겨요', tag: 'steward-preview', icon: './icons/icon-192.png', badge: './icons/badge-96.png', data: { url: './#/today' } });
+  }
+  if (k === 'dev-del') {
+    try { unwrap(await track(db.rpc('remove_push_subscription', { p_id: b.dataset.id }))); settings.devices = settings.devices.filter(d => d.id !== b.dataset.id); render(); toast('기기를 삭제했어요'); }
+    catch (err) { saveError(err); }
+  }
+});
 
 // ---------- events ----------
 sheet.addEventListener('click', e => { if (e.target.closest('[data-close]')) closeSheet(); });
@@ -921,6 +1120,7 @@ main.addEventListener('click', e => {
     if (k === 'triage') return openTriage();
     if (k === 'toggleLaterWeek') { ui.showLaterWeek = !ui.showLaterWeek; return render(); }
     if (k === 'signout') return signOut();
+    if (k === 'settings') return navigate('/settings');
     if (k === 'cc-add') return openAdd();
     if (k === 'cc-close') return dismissMorning();
     if (k === 'install') return promptInstall();
@@ -998,7 +1198,8 @@ function renderLogin(email = '', err = '') {
 }
 async function signOut() {
   flushAllText();
-  await db.auth.signOut();
+  await unsubscribeThisDevice().catch(() => {});   // 로그아웃하면 이 기기 알림도 끔 (구독 이전 정책: docs/notifications-impl.md 1-1)
+  if (!CFG.testAccessToken) await db.auth.signOut();   // 로컬 테스트는 고정 토큰이라 로그아웃 호출 없음
   tasks = []; recentWho = [];
   renderLogin();
 }
@@ -1029,6 +1230,7 @@ async function firstLoad() {
   currentDay = T();
   applyRoute();
   scheduleMidnight();
+  syncThisDevice();
 }
 // 다시 연결되면: 처음 불러오기에 실패했으면 다시 시도, 아니면 최신 데이터로
 window.addEventListener('online', () => { if (!started) return; if (loadFailed) firstLoad(); else refresh(); });

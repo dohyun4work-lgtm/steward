@@ -4,7 +4,7 @@
  * 3) 알림 누르기 → 이미 열린 앱이 있으면 그 창에서 해당 주소로, 없으면 새로 열기
  * Supabase(다른 도메인) 요청과 업무 데이터는 캐시하지 않음.
  */
-const VERSION = '2026-10-08.2';
+const VERSION = '2026-10-08.3';
 const CACHE = 'steward-shell-' + VERSION;
 const SHELL = [
   './', './index.html', './app.js', './styles.css', './config.js', './vendor/supabase.js', './manifest.webmanifest',

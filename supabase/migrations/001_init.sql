@@ -1,5 +1,5 @@
 -- =====================================================================
--- DH Task Hub — Supabase 스키마 · 보안 설계안 v2 (최종 검토용, 아직 실행 금지)
+-- DH Task Hub — Supabase 스키마 · 보안 설계안 v2 (실행 완료)
 -- v2: ① 반복 완료는 RPC만 ② 연동 키 폐기는 RPC만 ③ AI 함수는 Edge Function(service_role)만 호출 ④ 반복 재설정 시 새 시리즈
 -- 대상: Supabase (PostgreSQL 15+), Supabase Auth 사용
 -- 순서대로 한 번에 실행하는 마이그레이션 파일 형태

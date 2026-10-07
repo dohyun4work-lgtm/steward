@@ -203,3 +203,32 @@ body.signed-out .nav { display: none; }
 .install-hint p { margin: 4px 0 0; font-size: 13px; color: var(--muted); line-height: 1.5; }
 .install-hint b { color: var(--ink); }
 .install-hint .btn { flex: none; }
+
+/* ---- 5단계: 알림 설정 ---- */
+.foot-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.set-sec { margin-top: 18px; }
+.set-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px; cursor: pointer; }
+.set-row span, .set-kind, .set-dev span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.set-row small, .set-kind small, .set-dev small { font-size: 12px; color: var(--muted); }
+.set-card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
+.set-note { margin: 0; font-size: 14px; color: var(--muted); line-height: 1.55; }
+.set-note b { color: var(--ink); }
+.set-btns { display: flex; gap: 8px; flex-wrap: wrap; }
+.set-dev { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 12px 14px; border-top: 1px solid var(--line); }
+.set-dev:first-child { border-top: 0; }
+.btn.danger { color: var(--danger); }
+.set-slot { border-top: 1px solid var(--line); }
+.set-slot:first-child { border-top: 0; }
+.set-slot summary { list-style: none; display: flex; align-items: center; gap: 14px; padding: 13px 14px; cursor: pointer; }
+.set-slot summary::-webkit-details-marker { display: none; }
+.set-slot.off .set-time, .set-slot.off .set-kind b { color: var(--muted); }
+.set-time { font-family: var(--mono); font-size: 17px; font-weight: 500; font-variant-numeric: tabular-nums; min-width: 52px; }
+.set-kind { flex: 1; }
+.set-slot-body { padding: 0 14px 14px; display: flex; flex-direction: column; gap: 8px; }
+.set-slot-body .lbl { font-size: 12px; font-weight: 700; color: var(--muted); letter-spacing: .04em; margin-top: 4px; }
+.set-time-input { max-width: 160px; }
+.switch { appearance: none; -webkit-appearance: none; flex: none; width: 46px; height: 28px; border-radius: 14px; background: var(--line); position: relative; cursor: pointer; transition: background .15s; margin: 0; }
+.switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 22px; height: 22px; border-radius: 50%; background: var(--surface); box-shadow: 0 1px 2px rgba(0,0,0,.2); transition: transform .15s; }
+.switch:checked { background: var(--accent); }
+.switch:checked::after { transform: translateX(18px); }
+@media (prefers-reduced-motion: reduce) { .switch, .switch::after { transition: none; } }
