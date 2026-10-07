@@ -54,5 +54,5 @@ DH의 개인 업무 허브 웹앱 **Steward**. 태그라인 "A daily rhythm for 
 2. ✅ 해시 라우팅 + 날짜 변경 처리
 3. ✅ 체크인 화면 3종 (`docs/checkin-design.md`) — `#/checkin/morning|midday|evening|evening_final?d=`, `#/review?d=`, `daily_reviews` + `save_daily_review` (002)
 4. ✅ PWA + 서비스 워커 — `manifest.webmanifest`, `sw.js` (셸 네트워크 우선 캐시, 푸시 표시, 알림 누름 → 열린 앱에 `steward:open` 메시지)
-5. ⏳ 알림 구현 완료·로컬 검증 완료, **실제 배포 대기** (`docs/deploy-stage5.md` 순서: 003 → 005 → Edge Function(JWT 끔) → 공개키 확인 → 004 → 앱 push). 설계 `docs/notifications-impl.md`. 로컬 스택은 `*_cron.sql`을 건너뜀
-6. 실제 기기 테스트
+5. ✅ 알림 배포 완료 (2026-10-08): 003·005·004 실행, `send-checkins` 배포(Verify JWT 끔), 공개키 생성 확인, 예약 `steward-checkins` 매분 실행 중. 설계 `docs/notifications-impl.md`, 순서 `docs/deploy-stage5.md`. 로컬 스택은 `*_cron.sql`을 건너뜀
+6. ⏳ 실제 기기 테스트 (휴대폰 알림 켜기 → 실제 도착·누르기 확인)
