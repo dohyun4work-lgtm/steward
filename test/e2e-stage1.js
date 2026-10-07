@@ -127,7 +127,8 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   await page.unroute('**/rest/v1/tasks**');
 
   // 13. 다른 사용자: 내 업무가 안 보임
-  const page2 = await ctx.newPage();
+  // 다른 사용자는 별도 브라우저 프로필로 (서비스 워커·저장소를 공유하지 않게)
+  const page2 = await (await browser.newContext({ viewport: { width: 390, height: 844 }, timezoneId: 'Asia/Seoul' })).newPage();
   await page2.route('**/config.js', r => r.continue({ url: BASE + 'config.js?u=b' }));
   await page2.goto(BASE); await page2.waitForSelector('.top h1');
   check('다른 사용자 화면: 업무 0건', (await page2.locator('.row').count()) === 0);

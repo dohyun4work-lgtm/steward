@@ -197,3 +197,9 @@ body.signed-out .nav { display: none; }
 .rv-cand input { accent-color: var(--accent); width: 18px; height: 18px; flex: none; }
 .rv-cand span { min-width: 0; overflow-wrap: anywhere; }
 .rv-cands .empty { padding: 12px; }
+
+/* ---- 4단계: 설치 안내 ---- */
+.install-hint { margin-top: 24px; background: var(--accent-soft); border-radius: 12px; padding: 14px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.install-hint p { margin: 4px 0 0; font-size: 13px; color: var(--muted); line-height: 1.5; }
+.install-hint b { color: var(--ink); }
+.install-hint .btn { flex: none; }

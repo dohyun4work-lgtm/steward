@@ -7,7 +7,7 @@ const PORT = Number(process.env.PORT || 4400);
 const users = { a: '11111111-1111-1111-1111-111111111111', b: '22222222-2222-2222-2222-222222222222' };
 const token = sub => jwt.sign({ sub, role: 'authenticated', aud: 'authenticated', email: 'dh@example.com' }, SECRET, { expiresIn: '2h' });
 const anon = jwt.sign({ role: 'anon' }, SECRET, { expiresIn: '2h' });
-const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json' };
+const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png' };
 http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
   if (url.pathname.startsWith('/rest/v1/')) {

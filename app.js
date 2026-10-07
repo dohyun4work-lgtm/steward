@@ -311,6 +311,7 @@ function renderArchive() {
       : `<div class="empty-big"><b>완료한 일이 없어요</b></div>`;
     if (items.length) html += `<p class="foot-note">초록 체크를 누르면 완료가 취소돼요. 최근 ${DONE_DAYS}일만 보여요.</p>`;
   }
+  html += installHintHTML();
   html += `<div class="foot-note"><span class="account">${esc(userEmail)}<span class="brandline">Steward · A daily rhythm for faithful work.</span></span><button class="btn" data-act="signout">로그아웃</button></div>`;
   main.innerHTML = html;
 }
@@ -922,6 +923,7 @@ main.addEventListener('click', e => {
     if (k === 'signout') return signOut();
     if (k === 'cc-add') return openAdd();
     if (k === 'cc-close') return dismissMorning();
+    if (k === 'install') return promptInstall();
     const row = act.closest('.row'); const id = row?.dataset.id; if (!id) return;
     if (k === 'done') return completeTask(id, row);
     if (k === 'undone') return uncompleteTask(id).then(() => toast('완료를 취소했어요'));
@@ -1001,17 +1003,68 @@ async function signOut() {
   renderLogin();
 }
 let started = false;
+let loadFailed = false;
 async function startApp(session) {
   userEmail = session?.user?.email || CFG.testEmail || '';
   if (started) return;
   started = true;
   document.body.classList.remove('signed-out');
+  await firstLoad();
+}
+async function firstLoad() {
+  if (navigator.onLine === false) {   // 이미 끊긴 게 확실하면 기다리지 않고 바로 안내
+    loadFailed = true;
+    main.innerHTML = `<div class="empty-big"><b>오프라인이에요</b>인터넷에 다시 연결되면 자동으로 불러올게요.</div>`;
+    return;
+  }
   main.innerHTML = `<div class="loading">불러오는 중…</div>`;
-  try { await loadAll(); }
-  catch (e) { console.error(e); main.innerHTML = `<div class="empty-big"><b>불러오지 못했어요</b>연결을 확인하고 다시 열어 주세요.</div>`; return; }
+  try { await loadAll(); loadFailed = false; }
+  catch (e) {
+    console.error('[taskhub] load', e); loadFailed = true;
+    main.innerHTML = navigator.onLine === false
+      ? `<div class="empty-big"><b>오프라인이에요</b>인터넷에 다시 연결되면 자동으로 불러올게요.</div>`
+      : `<div class="empty-big"><b>불러오지 못했어요</b>연결을 확인하고 다시 열어 주세요.</div>`;
+    return;
+  }
   currentDay = T();
   applyRoute();
   scheduleMidnight();
+}
+// 다시 연결되면: 처음 불러오기에 실패했으면 다시 시도, 아니면 최신 데이터로
+window.addEventListener('online', () => { if (!started) return; if (loadFailed) firstLoad(); else refresh(); });
+
+// ---------- PWA ----------
+const isStandalone = () => window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+const isIOS = () => /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+let installPrompt = null;
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installPrompt = e; if (ui.tab === 'archive') render(); });
+window.addEventListener('appinstalled', () => { installPrompt = null; if (ui.tab === 'archive') render(); });
+// 보관 탭 아래: 아직 홈 화면 앱이 아니면 설치 방법 안내 (알림은 홈 화면 앱에서만 받을 수 있음)
+function installHintHTML() {
+  if (isStandalone()) return '';
+  const how = isIOS()
+    ? 'Safari 아래쪽 <b>공유</b> 버튼 → <b>홈 화면에 추가</b>'
+    : installPrompt ? '' : '브라우저 메뉴 → <b>앱 설치</b> 또는 <b>홈 화면에 추가</b>';
+  return `<div class="install-hint">
+    <div><b>홈 화면에 추가하기</b><p>앱처럼 바로 열리고, 체크인 알림도 받을 수 있어요.${how ? `<br>${how}` : ''}</p></div>
+    ${installPrompt ? '<button class="btn primary" data-act="install">앱 설치</button>' : ''}
+  </div>`;
+}
+async function promptInstall() {
+  if (!installPrompt) return;
+  const p = installPrompt; installPrompt = null;
+  p.prompt();
+  try { await p.userChoice; } catch (_) {}
+  render();
+}
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => { navigator.serviceWorker.register('sw.js').catch(e => console.error('[taskhub] sw', e)); });
+  // 알림을 눌렀는데 앱이 이미 열려 있으면, 서비스 워커가 주소만 보내옴 → 새로고침 없이 이동
+  navigator.serviceWorker.addEventListener('message', e => {
+    if (e.data?.type !== 'steward:open') return;
+    const hash = new URL(e.data.url, location.href).hash || '#/today';
+    if (location.hash === hash) applyRoute(); else location.hash = hash;
+  });
 }
 
 async function boot() {
