@@ -17,7 +17,8 @@ DH의 개인 업무 허브 웹앱 **Steward**. 태그라인 "A daily rhythm for 
 - 정적 사이트 (GitHub Pages). 빌드 없음.
 - `index.html` 마크업, `styles.css` 스타일(색·글꼴 토큰, 다크 모드), `app.js` 전체 로직, `config.js` Supabase 주소·공개 키
 - `vendor/supabase.js` supabase-js UMD (CDN 의존 없이 번들)
-- `supabase/migrations/001_init.sql` DB 스키마·RLS·RPC (설계: `docs/db-design.md`)
+- `supabase/migrations/` DB 스키마·RLS·RPC, 번호 순서대로 실행 (001 기본, 002 하루 복기). 설계: `docs/db-design.md`
+- 새 마이그레이션은 앱 배포 **전에** 실제 Supabase에 먼저 실행 (앱이 새 테이블을 바로 읽음)
 - `docs/` 설계 문서 (프로토타입 구조, DB 설계, 체크인 알림 설계)
 
 ## 데이터 규칙 (app.js)
@@ -28,6 +29,7 @@ DH의 개인 업무 허브 웹앱 **Steward**. 태그라인 "A daily rhythm for 
 - "오늘"은 항상 Asia/Seoul 기준 (`T()`), DB의 `app_today()`와 일치.
 - 상태 전환 규칙은 `statusFields()` 한 곳에.
 - 주소는 해시 라우팅 (`ROUTES`): `#/today` `#/today/week` `#/inbox` `#/waiting` `#/archive` `#/archive/done`. 탭 이동은 기록을 남기고, 같은 화면 안 보기 전환은 `replace`.
+- 체크인 시트는 `leaveCheckin`으로 닫힐 때 주소를 `#/today`로 되돌림. 상세·대기·미루기는 `back` 콜백으로 원래 체크인 화면에 복귀.
 - 날짜 변경: 자정 타이머 + 1분 간격 확인 + 앱 복귀(visibilitychange/pageshow/focus). 날짜가 바뀌면 상세 외 시트는 닫고 다시 불러옴. 앱 복귀 시 30초 넘었으면 서버에서 다시 불러옴(`refresh`는 저장 중인 요청이 끝난 뒤 실행).
 
 ## 테스트
@@ -36,12 +38,13 @@ DH의 개인 업무 허브 웹앱 **Steward**. 태그라인 "A daily rhythm for 
 - `test/server.js`: 앱 정적 파일 + `/rest/v1` → PostgREST 프록시 + 테스트용 config (JWT 직접 발급, 로그인 우회)
 - `test/e2e-stage1.js`: 본체 기능 E2E, 결과를 DB에서 직접 확인
 - `test/e2e-stage2.js`: 라우팅 + 자정 넘기기 (Playwright 가짜 시계)
+- `test/e2e-stage3.js`: 체크인 4종 + 복기 (시간대별 가짜 시계, 복기 중 자정 넘김 포함). 서버 RPC가 실제 날짜를 쓰므로 테스트 날짜는 `app_today()` 기준
 - 로그인은 이메일+비밀번호 (메일 발송 없음). 실제 로그인 성공은 실제 Supabase Auth에서 확인.
 
 ## 진행 단계
 1. ✅ 본체 Supabase 연결
 2. ✅ 해시 라우팅 + 날짜 변경 처리
-3. 체크인 화면 3종 (`docs/checkin-design.md`)
+3. ✅ 체크인 화면 3종 (`docs/checkin-design.md`) — `#/checkin/morning|midday|evening|evening_final?d=`, `#/review?d=`, `daily_reviews` + `save_daily_review` (002)
 4. PWA + 서비스 워커
 5. push_subscriptions / notification_log / Cron / Edge Function
 6. 실제 기기 테스트

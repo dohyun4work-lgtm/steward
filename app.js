@@ -35,6 +35,7 @@ const db = window.supabase.createClient(CFG.supabaseUrl, CFG.supabaseAnonKey, cl
 // ---------- state ----------
 let tasks = [];
 let recentWho = [];
+let reviews = {};          // review_date → daily_reviews 행 (어제·오늘만)
 let userEmail = '';
 const byId = id => tasks.find(t => t.id === id);
 const live = () => tasks.filter(t => !t.deleted_at);
@@ -75,11 +76,13 @@ const unwrap = ({ data, error }) => { if (error) throw error; return data; };
 // ---------- data: load ----------
 async function loadAll() {
   const since = new Date(Date.now() - DONE_DAYS * 86400000).toISOString();
-  const [open, done, who] = await Promise.all([
+  const [open, done, who, rev] = await Promise.all([
     db.from('tasks').select('*').is('deleted_at', null).neq('status', 'done'),
     db.from('tasks').select('*').is('deleted_at', null).eq('status', 'done').gte('done_at', since),
     db.from('recent_waiting').select('name').order('last_used_at', { ascending: false }).limit(8),
+    db.from('daily_reviews').select('*').gte('review_date', addDays(T(), -1)),
   ]);
+  reviews = Object.fromEntries(unwrap(rev).map(x => [x.review_date, x]));
   tasks = [...unwrap(open), ...unwrap(done)].map(norm);
   recentWho = unwrap(who).map(r => r.name);
   // 아직 저장 전인 입력(제목·메모·다음 행동)은 새로 불러온 값 위에 다시 얹음
@@ -91,7 +94,11 @@ let lastLoadAt = 0, refreshing = false;
 const whenIdle = () => new Promise(res => { const tick = () => pending === 0 ? res() : setTimeout(tick, 50); tick(); });
 async function refresh() {
   if (refreshing) return; refreshing = true;
-  try { await whenIdle(); await loadAll(); render(); if (!sheet.hidden && sheetKind === 'detail' && detailId) openDetail(detailId); }
+  try {
+    await whenIdle(); await loadAll(); render();
+    if (!sheet.hidden && sheetKind === 'detail' && detailId) openDetail(detailId, detailBack);
+    else if (!sheet.hidden && sheetKind === 'review' && reviewRedraw) reviewRedraw();   // 자정이 지나면 "내일" → 날짜 표기로
+  }
   catch (e) { console.error('[taskhub] refresh', e); }
   finally { refreshing = false; }
 }
@@ -196,7 +203,7 @@ const inbox = () => live().filter(t => t.status === 'inbox').sort((a, b) => a.cr
 function sortTask(a, b) { return (b.starred - a.starred) || (a.do_date || '').localeCompare(b.do_date || '') || a.created_at.localeCompare(b.created_at); }
 
 // ---------- ui state ----------
-const ui = { tab: 'today', todayMode: 'today', archMode: 'later', showLaterWeek: false };
+const ui = { tab: 'today', todayMode: 'today', archMode: 'later', showLaterWeek: false, morningCard: false };
 const top = document.getElementById('top'), main = document.getElementById('main');
 
 // ---------- rendering ----------
@@ -219,7 +226,7 @@ function rowHTML(t, opts = {}) {
   }
   if (opts.done && t.done_at) meta.push(`<span class="meta">완료 ${md(seoulDate(new Date(t.done_at)))}</span>`);
   const sub = (opts.subWho || (t.status === 'waiting' && !t.next_action)) && t.waiting_for ? `${esc(t.waiting_for)} 기다리는 중` : (t.next_action ? esc(t.next_action) : '');
-  const actions = opts.followup ? `<div class="row-actions"><button class="btn primary" data-act="received">받음</button><button class="btn" data-act="refollow">다시 미루기</button></div>` : '';
+  const actions = opts.extra || (opts.followup ? `<div class="row-actions"><button class="btn primary" data-act="received">받음</button><button class="btn" data-act="refollow">다시 미루기</button></div>` : '');
   const checkCls = opts.done ? 'check filled' : 'check';
   return `<div class="row" data-id="${t.id}" ${opts.noswipe ? 'data-noswipe' : ''}>
     <div class="swipe-bg"><span class="l">완료</span><span class="r">미루기</span></div>
@@ -246,7 +253,8 @@ function renderToday() {
   const seg = `<div class="seg" role="group" aria-label="보기"><button data-mode="today" aria-pressed="${ui.todayMode === 'today'}">오늘</button><button data-mode="week" aria-pressed="${ui.todayMode === 'week'}">이번 주</button></div>`;
   header(`${parse(t).getMonth() + 1}월 ${parse(t).getDate()}일 (${DOW[dowOf(t)]})`, '', seg);
   const n = inbox().length;
-  let html = n ? `<button class="banner" data-act="triage"><span>인박스 ${n}개 정리하기</span><span aria-hidden="true">›</span></button>` : '';
+  let html = (ui.morningCard && ui.todayMode === 'today') ? morningCardHTML() : '';
+  html += n ? `<button class="banner" data-act="triage"><span>인박스 ${n}개 정리하기</span><span aria-hidden="true">›</span></button>` : '';
   if (ui.todayMode === 'today') {
     const o = overdue(), d = todayList(), f = followUps();
     html += sec('기한 초과', o, {}, 'danger') + sec('오늘', d) + sec('확인 필요', f, { followup: true, subWho: true, waiting: true, noswipe: true });
@@ -317,7 +325,7 @@ function render() {
 }
 // ---------- 라우팅 (해시) ----------
 // #/today  #/today/week  #/inbox  #/waiting  #/archive  #/archive/done
-// 체크인 주소(#/checkin/…, #/review)는 3단계에서 추가
+// 체크인: #/checkin/morning|midday|evening|evening_final?d=날짜&n=알림기록  #/review?d=날짜
 const ROUTES = {
   '/today':        { tab: 'today', todayMode: 'today' },
   '/today/week':   { tab: 'today', todayMode: 'week' },
@@ -327,15 +335,21 @@ const ROUTES = {
   '/archive/done': { tab: 'archive', archMode: 'done' },
 };
 const pathOf = () => (location.hash.replace(/^#/, '').split('?')[0] || '/today');
+const paramsOf = () => new URLSearchParams(location.hash.split('?')[1] || '');
+const CHECKIN_KINDS = ['morning', 'midday', 'evening', 'evening_final'];
 function pathForUi() {
   if (ui.tab === 'today') return ui.todayMode === 'week' ? '/today/week' : '/today';
   if (ui.tab === 'archive') return ui.archMode === 'done' ? '/archive/done' : '/archive';
   return '/' + ui.tab;
 }
 function applyRoute() {
-  const r = ROUTES[pathOf()];
+  const path = pathOf();
+  ui.morningCard = false;
+  if (path.startsWith('/checkin/') || path === '/review') return applyCheckinRoute(path);
+  const r = ROUTES[path];
   if (!r) { history.replaceState(null, '', '#/today'); Object.assign(ui, ROUTES['/today']); }
   else Object.assign(ui, r);
+  if (sheetKind === 'checkin' || sheetKind === 'review') closeSheet();
   render();
 }
 // replace: 같은 화면 안의 보기 전환(오늘/이번 주, 나중에/완료)은 뒤로 가기 기록을 남기지 않음
@@ -365,7 +379,8 @@ function checkDay(reason) {
   scheduleMidnight();
 }
 function onDayChange() {
-  if (!sheet.hidden && sheetKind !== 'detail') { closeSheet(); toast('날짜가 바뀌었어요'); }
+  // 상세와 하루 복기(날짜가 주소에 고정됨)는 유지, 나머지 시트는 닫음
+  if (!sheet.hidden && sheetKind !== 'detail' && sheetKind !== 'review') { closeSheet(); toast('날짜가 바뀌었어요'); }
   flushAllText();
   render();          // 우선 화면 날짜부터 바로 갱신
   refresh();         // 서버 기준으로 다시 불러오기 (상세 시트는 열린 채 새 날짜로 다시 그림)
@@ -386,9 +401,9 @@ toastUndo.addEventListener('click', () => { const f = undoFn; undoFn = null; toa
 
 // ---------- sheets ----------
 const scrim = document.getElementById('scrim'), sheet = document.getElementById('sheet');
-let sheetClose = null, lastFocus = null, sheetKind = null, detailId = null;
+let sheetClose = null, lastFocus = null, sheetKind = null, detailId = null, detailBack = null, reviewRedraw = null;
 function openSheet(html, onClose, kind = 'other') {
-  sheetKind = kind; if (kind !== 'detail') detailId = null;
+  sheetKind = kind; if (kind !== 'detail') { detailId = null; detailBack = null; } if (kind !== 'review') reviewRedraw = null;
   lastFocus = document.activeElement;
   sheet.innerHTML = `<button class="grab" data-close aria-label="닫기"><span></span></button>` + html;
   sheet.onclick = null; sheet.hidden = false; scrim.hidden = false; sheetClose = onClose || null; sheet.scrollTop = 0;
@@ -396,7 +411,7 @@ function openSheet(html, onClose, kind = 'other') {
 function closeSheet() {
   if (sheet.hidden) return;
   flushAllText();
-  sheet.hidden = true; scrim.hidden = true; sheet.innerHTML = ''; sheetKind = null; detailId = null;
+  sheet.hidden = true; scrim.hidden = true; sheet.innerHTML = ''; sheetKind = null; detailId = null; detailBack = null; reviewRedraw = null;
   const f = sheetClose; sheetClose = null; if (f) f(); render();
   if (lastFocus && document.contains(lastFocus)) lastFocus.focus();
 }
@@ -448,7 +463,7 @@ function openAdd() {
 }
 
 // Postpone
-function openPostpone(id) {
+function openPostpone(id, back) {
   const t = byId(id); if (!t) return; const d = T();
   const opts = [['tomorrow', '내일', addDays(d, 1)], ['week', '이번 주', weekEnd(d)], ['nextweek', '다음 주', nextMonday(d)]];
   openSheet(`<h2>미루기</h2><div class="row-sub" style="margin-top:-6px">${esc(t.title)}</div>
@@ -457,7 +472,8 @@ function openPostpone(id) {
       <button class="chip" data-pp="later">나중에</button>
       <button class="chip" data-pp="waiting">대기로</button>
     </div></div>
-    <div class="field"><label for="ppDate">날짜 선택</label><div class="date-inline"><input type="date" class="input" id="ppDate" min="${d}"><button class="btn" id="ppGo">적용</button></div></div>`);
+    <div class="field"><label for="ppDate">날짜 선택</label><div class="date-inline"><input type="date" class="input" id="ppDate" min="${d}"><button class="btn" id="ppGo">적용</button></div></div>`,
+    back ? () => setTimeout(back, 0) : null);
   const setDo = (date, label) => {
     const f = t.status === 'active' ? { do_date: date } : { ...statusFields(t, 'active'), do_date: date };
     closeSheet(); change(id, f, label);
@@ -466,7 +482,7 @@ function openPostpone(id) {
     const b = e.target.closest('[data-pp]');
     if (b) {
       const v = b.dataset.pp;
-      if (v === 'waiting') return openWaiting(id);
+      if (v === 'waiting') return openWaiting(id, back);
       if (v === 'later') { closeSheet(); return change(id, statusFields(t, 'later'), '나중에로 옮겼어요'); }
       return setDo(v, `${b.dataset.label}(${mdw(v)})로 미뤘어요`);
     }
@@ -478,7 +494,7 @@ function openPostpone(id) {
 }
 
 // Waiting
-function openWaiting(id, fromDetail) {
+function openWaiting(id, back) {
   const t = byId(id); if (!t) return; const d = T();
   const recent = recentWho.slice(0, 5);
   let who = t.waiting_for || '', fu = addDays(d, 3);
@@ -493,7 +509,7 @@ function openWaiting(id, fromDetail) {
       <input class="input" id="whoInput" placeholder="직접 입력" maxlength="100" value="${esc(who)}"></div>
     <div class="field"><span class="lbl">언제 다시 확인할까요?</span><div class="chips" id="fuChips"></div></div>
     <div class="sheet-foot"><button class="btn ghost" data-close>취소</button><button class="btn primary" id="wDone">완료</button></div>`,
-    fromDetail ? () => setTimeout(() => openDetail(id), 0) : null);
+    back ? () => setTimeout(back, 0) : null);
   draw();
   const input = sheet.querySelector('#whoInput');
   input.addEventListener('input', () => { who = input.value; draw(); });
@@ -565,7 +581,7 @@ function openTriage() {
 }
 
 // Detail
-function openDetail(id) {
+function openDetail(id, back) {
   const t = byId(id); if (!t) return;
   const draw = () => {
     const d = T();
@@ -590,8 +606,8 @@ function openDetail(id) {
         <div class="field"><span class="lbl">반복</span><div class="chips" id="dRepeat">${[[null, '없음'], ['weekly', '매주'], ['monthly', '매월']].map(([k, l]) => `<button class="chip" data-rp="${k}" aria-pressed="${cur.repeat_rule === k}">${l}</button>`).join('')}</div></div>
         <div class="metaline">만든 날 ${md(seoulDate(new Date(cur.created_at)))} · 출처 ${cur.source}</div>
       </details>
-      <div class="sheet-foot"><button class="btn danger" id="dDel">삭제</button><span class="saved"></span><button class="btn primary" data-close>닫기</button></div>`, null, 'detail');
-    detailId = id;
+      <div class="sheet-foot"><button class="btn danger" id="dDel">삭제</button><span class="saved"></span><button class="btn primary" data-close>닫기</button></div>`, back ? () => setTimeout(back, 0) : null, 'detail');
+    detailId = id; detailBack = back || null;
     bind(cur);
     sheet.scrollTop = keep;
     showSave(true);
@@ -605,12 +621,12 @@ function openDetail(id) {
     q('#dStar').addEventListener('click', () => set({ starred: !cur.starred }));
     q('#dStatus').addEventListener('click', e => {
       const b = e.target.closest('[data-st]'); if (!b || b.dataset.st === cur.status) return;
-      if (b.dataset.st === 'waiting') { flushAllText(); return openWaiting(id, true); }
+      if (b.dataset.st === 'waiting') { flushAllText(); return openWaiting(id, () => openDetail(id, back)); }
       if (b.dataset.st === 'done') { closeSheet(); return completeTask(id, null); }
       if (cur.status === 'done') { closeSheet(); return uncompleteTask(id); }
       set(statusFields(cur, b.dataset.st));
     });
-    q('#dWaitEdit')?.addEventListener('click', () => { flushAllText(); openWaiting(id, true); });
+    q('#dWaitEdit')?.addEventListener('click', () => { flushAllText(); openWaiting(id, () => openDetail(id, back)); });
     q('#dDo')?.addEventListener('click', e => { const b = e.target.closest('[data-do]'); if (b) set({ do_date: b.dataset.do }); });
     q('#dDoDate')?.addEventListener('change', e => { if (e.target.value) set({ do_date: e.target.value }); });
     q('#dDue').addEventListener('change', e => set({ due_date: e.target.value || null }));
@@ -624,6 +640,262 @@ function openDetail(id) {
     q('#dDel').addEventListener('click', () => { closeSheet(); change(id, { deleted_at: new Date().toISOString() }, '삭제했어요'); });
   };
   draw();
+}
+
+// ---------- 체크인 (설계: docs/checkin-design.md v2) ----------
+// 09 morning: TODAY + 아침 카드 / 12·15 midday: 남은 업무 + 빠른 추가
+// 18 evening: 한 장씩 재조정 (오늘 유지 첫 버튼) / 21 evening_final: 목록 + 모두 내일로
+// 23 review: 요약 + 한 줄 복기 + 내일 가장 중요한 일
+const clockNow = () => new Intl.DateTimeFormat('en-GB', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date());
+// day 기준으로 아직 끝나지 않은 일: 할 날이 지났거나 오늘인 진행 업무 + 상태와 관계없이 마감이 지났거나 오늘인 업무
+const remainingOn = day => live().filter(t => OPEN.has(t.status) && ((t.status === 'active' && t.do_date && t.do_date <= day) || (t.due_date && t.due_date <= day)))
+  .sort((a, b) => ((a.due_date && a.due_date < day) ? 0 : 1) - ((b.due_date && b.due_date < day) ? 0 : 1) || sortTask(a, b));
+const doneOn = day => live().filter(t => t.status === 'done' && t.done_at && seoulDate(new Date(t.done_at)) === day);
+const moveFields = (t, date) => t.status === 'active' ? { do_date: date } : { ...statusFields(t, 'active'), do_date: date };
+const cardMeta = t => [t.area,
+  t.due_date ? (t.due_date < T() ? `마감 ${md(t.due_date)} 지남` : t.due_date === T() ? '오늘 마감' : `마감 ${md(t.due_date)}`) : '',
+  t.status !== 'active' ? { inbox: '인박스', waiting: '대기 중', later: '나중에' }[t.status] : ''].filter(Boolean).join(' · ');
+// 체크인 시트를 닫으면 주소를 오늘로 (뒤로 가기 기록은 남기지 않음)
+const leaveCheckin = () => { if (/^#\/(checkin|review)/.test(location.hash)) history.replaceState(null, '', '#/today'); };
+
+function applyCheckinRoute(path) {
+  const today = T();
+  let d = paramsOf().get('d');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d || '') || d > today) d = today;
+  Object.assign(ui, ROUTES['/today']);
+  if (!sheet.hidden) { sheetClose = null; closeSheet(); }   // 이전 시트의 '주소 되돌리기'가 새 주소를 덮지 않게
+  if (path === '/review') {
+    if (d < addDays(today, -7)) d = today;
+    render(); return openReview(d);
+  }
+  const kind = path.slice('/checkin/'.length);
+  if (!CHECKIN_KINDS.includes(kind)) { history.replaceState(null, '', '#/today'); return render(); }
+  // 체크인 알림을 다음 날 눌렀으면 정리 화면 대신 오늘 화면만
+  if (d < today) { history.replaceState(null, '', '#/today'); render(); return toast(d === addDays(today, -1) ? '어제 알림이에요 · 오늘 화면을 보여드려요' : '지난 알림이에요 · 오늘 화면을 보여드려요'); }
+  if (kind === 'morning') { ui.morningCard = true; return render(); }
+  render();
+  if (kind === 'midday') openMidday();
+  else if (kind === 'evening') openEvening();
+  else openEveningFinal();
+}
+
+// 09:00 아침 카드
+function morningCardHTML() {
+  const rv = reviews[addDays(T(), -1)];
+  const topTask = rv?.top_task_id ? byId(rv.top_task_id) : null;
+  let topHTML = '';
+  if (topTask && !topTask.deleted_at) {
+    topHTML = topTask.status === 'done'
+      ? `<div class="cc-label">★ 어제 정한 「${esc(topTask.title)}」은 이미 끝냈어요</div>`
+      : `<div class="cc-label">★ 오늘 가장 중요한 일</div>${listHTML([topTask], { noswipe: true })}`;
+  }
+  return `<section class="cc-card" aria-label="아침 체크인">
+    <div class="cc-head"><b>좋은 아침이에요</b><span class="cc-counts">기한 초과 ${overdue().length} · 오늘 ${todayList().length} · 확인 필요 ${followUps().length}</span></div>
+    ${topHTML}
+    <div class="cc-actions"><button class="btn primary" data-act="cc-add">＋ 추가</button><button class="btn ghost" data-act="cc-close">닫기</button></div>
+  </section>`;
+}
+function dismissMorning() { ui.morningCard = false; leaveCheckin(); render(); }
+
+// 12:00 · 15:00 중간 체크
+function openMidday() {
+  let draft = '';
+  const draw = (focusAdd = false) => {
+    const today = T(), rem = remainingOn(today), keep = sheet.hidden ? 0 : sheet.scrollTop;
+    openSheet(`<div class="ci-head"><h2>중간 체크</h2><span class="progress">남음 ${rem.length} · 완료 ${doneOn(today).length}</span></div>
+      <p class="ci-sub">${clockNow()} · 남은 업무를 확인하고, 생각난 일은 바로 적어 두세요.</p>
+      ${rem.length ? `<div class="list ci-list">${rem.map(t => rowHTML(t, { noswipe: true })).join('')}</div>` : `<div class="list"><div class="empty">오늘 남은 업무가 없어요.</div></div>`}
+      <form class="add-row ci-add" id="ciAdd" autocomplete="off"><input class="input" id="ciAddTitle" placeholder="생각난 일 바로 추가…" maxlength="500" enterkeyhint="done" value="${esc(draft)}"><button class="btn" type="submit">추가</button></form>
+      <div class="sheet-foot"><span class="saved"></span><button class="btn primary" id="ciDone">확인 완료</button></div>`, leaveCheckin, 'checkin');
+    sheet.scrollTop = keep;
+    const input = sheet.querySelector('#ciAddTitle');
+    if (focusAdd) input.focus();
+    input.addEventListener('input', () => { draft = input.value; });
+    sheet.querySelector('#ciAdd').addEventListener('submit', async e => {
+      e.preventDefault();
+      const title = input.value.trim(); if (!title) return;
+      draft = ''; input.value = '';
+      await insertTask({ title, status: 'active', do_date: T() });
+      if (sheetKind === 'checkin') draw(true);
+    });
+    sheet.querySelector('#ciDone').addEventListener('click', () => { closeSheet(); toast('중간 체크 완료'); });
+    sheet.onclick = async e => {
+      const row = e.target.closest('.row'); if (!row) return;
+      const id = row.dataset.id;
+      if (e.target.closest('.check')) { await completeTask(id, null); if (sheetKind === 'checkin') draw(); return; }
+      openDetail(id, () => draw());
+    };
+  };
+  draw();
+}
+
+// 18:00 저녁 재조정 — 한 장씩
+function openEvening() {
+  const queue = remainingOn(T()).map(t => t.id), total = queue.length, handled = new Set();
+  let kept = 0;
+  if (!total) {
+    return openSheet(`<h2>저녁 재조정</h2><div class="empty-big"><b>오늘 남은 업무가 없어요</b>오늘은 여기까지 해도 좋아요.</div>
+      <div class="sheet-foot"><span></span><button class="btn primary" data-close>닫기</button></div>`, leaveCheckin, 'checkin');
+  }
+  const alive = id => { const t = byId(id); return t && !t.deleted_at && t.status !== 'done'; };
+  const step = () => {
+    while (queue.length && (handled.has(queue[0]) || !alive(queue[0]))) queue.shift();
+    if (!queue.length) { closeSheet(); return toast(kept ? `저녁 재조정 끝 · 오늘 ${kept}개 남김` : '저녁 재조정 끝'); }
+    const t = byId(queue[0]);
+    openSheet(`<div class="ci-head"><h2>저녁 재조정</h2><span class="progress">${total - queue.length + 1} / ${total}</span></div>
+      <p class="ci-sub">오늘 안에 할 수 있나요?</p>
+      <div class="triage-card"><div class="t">${esc(t.title)}</div><div class="c">${esc(cardMeta(t)) || '&nbsp;'}</div></div>
+      <div class="triage-actions">
+        <button class="btn primary" data-ev="keep">오늘 유지</button>
+        <button class="btn" data-ev="tomorrow">내일</button>
+        <button class="btn" data-ev="wait">대기</button>
+        <button class="btn" data-ev="done">완료</button>
+      </div>
+      <div class="sheet-foot"><button class="btn ghost" data-close>그만하기</button><button class="btn ghost" data-ev="skip">건너뛰기 ›</button></div>`, leaveCheckin, 'checkin');
+    sheet.onclick = async e => {
+      const b = e.target.closest('[data-ev]'); if (!b) return;
+      const k = b.dataset.ev, id = queue[0];
+      sheet.onclick = null;
+      if (k === 'keep') { handled.add(id); kept++; return step(); }
+      if (k === 'skip') { queue.push(queue.shift()); return step(); }
+      if (k === 'tomorrow') { handled.add(id); patch(id, moveFields(t, addDays(T(), 1)), { rerender: false }); return step(); }
+      if (k === 'wait') return openWaiting(id, () => { if (byId(id)?.status === 'waiting') handled.add(id); step(); });
+      if (k === 'done') { handled.add(id); await completeTask(id, null); return step(); }
+    };
+  };
+  step();
+}
+
+// 21:00 오늘 마무리 — 목록 한 화면
+function openEveningFinal() {
+  const handled = new Set();
+  const finalActions = `<div class="row-actions"><button class="btn" data-fin="tomorrow">내일</button><button class="btn" data-fin="wait">대기</button><button class="btn" data-fin="other">다른 날</button></div>`;
+  const draw = () => {
+    const today = T(), tm = addDays(today, 1);
+    const rem = remainingOn(today).filter(t => !handled.has(t.id)), doneN = doneOn(today).length;
+    const keep = sheet.hidden ? 0 : sheet.scrollTop;
+    if (!rem.length) {
+      return openSheet(`<h2>오늘 마무리</h2><div class="empty-big"><b>오늘 마무리 완료</b>완료 ${doneN}개 · 23시에 하루를 1분만 돌아봐요.</div>
+        <div class="sheet-foot"><span></span><button class="btn primary" data-close>닫기</button></div>`, leaveCheckin, 'checkin');
+    }
+    openSheet(`<div class="ci-head"><h2>오늘 마무리</h2><span class="progress">완료 ${doneN} · 남음 ${rem.length}</span></div>
+      <p class="ci-sub">남은 업무를 넘기고 오늘을 마무리해요.</p>
+      <div class="list ci-list">${rem.map(t => rowHTML(t, { noswipe: true, extra: finalActions })).join('')}</div>
+      <div class="ci-stack"><button class="btn primary" data-fin="all">남은 ${rem.length}개 모두 내일로</button></div>
+      <button class="more-toggle" data-close>오늘 밤에 끝낼 거예요 ›</button>`, leaveCheckin, 'checkin');
+    sheet.scrollTop = keep;
+    sheet.onclick = async e => {
+      const b = e.target.closest('[data-fin]');
+      if (b?.dataset.fin === 'all') { sheet.onclick = null; return confirmMoveAll(rem.map(t => t.id), today, draw, handled); }
+      const row = e.target.closest('.row'); if (!row) return;
+      const id = row.dataset.id, t = byId(id); if (!t) return;
+      if (e.target.closest('.check')) { handled.add(id); await completeTask(id, null); if (sheetKind === 'checkin') draw(); return; }
+      if (b) {
+        const k = b.dataset.fin;
+        if (k === 'tomorrow') { handled.add(id); patch(id, moveFields(t, tm), { rerender: false }); return draw(); }
+        if (k === 'wait') return openWaiting(id, () => { if (byId(id)?.status === 'waiting') handled.add(id); draw(); });
+        if (k === 'other') {
+          const before = t.status + '|' + t.do_date;
+          return openPostpone(id, () => { const x = byId(id); if (x && x.status + '|' + x.do_date !== before) handled.add(id); draw(); });
+        }
+        return;
+      }
+      openDetail(id, draw);
+    };
+  };
+  draw();
+}
+
+// "모두 내일로" — 마감 있는 업무가 섞여 있으면 같은 시트 안에서 한 번 확인 (21시·23시 공통)
+function confirmMoveAll(ids, baseDay, back, handled) {
+  const tm = addDays(baseDay, 1);
+  const doMove = async list => {
+    list.forEach(id => handled?.add(id));
+    const prevs = [];
+    await Promise.all(list.map(id => { const t = byId(id); return t ? patch(id, moveFields(t, tm), { rerender: false }).then(p => { if (p) prevs.push([id, p]); }) : null; }));
+    back();
+    if (prevs.length) toast(`${prevs.length}개를 ${mdw(tm)}로 옮겼어요`, async () => {
+      prevs.forEach(([id]) => handled?.delete(id));
+      await Promise.all(prevs.map(([id, p]) => patch(id, p, { rerender: false })));
+      if (sheetKind === 'checkin' || sheetKind === 'review') back(); else render();
+    });
+  };
+  const withDue = ids.filter(id => { const t = byId(id); return t?.due_date && t.due_date <= baseDay; });
+  if (!withDue.length) return doMove(ids);
+  const today = T(), over = withDue.filter(id => byId(id).due_date < today).length, dueToday = withDue.length - over;
+  const kind = sheetKind;
+  openSheet(`<h2>마감이 있는 업무가 있어요</h2>
+    <p class="ci-sub">${[over ? `기한 초과 ${over}` : '', dueToday ? `오늘 마감 ${dueToday}` : ''].filter(Boolean).join(' · ')}</p>
+    <ul class="ci-due">${withDue.map(id => { const t = byId(id); return `<li><span>${esc(t.title)}</span><span class="meta danger">${t.due_date < today ? md(t.due_date) + ' 마감' : '오늘 마감'}</span></li>`; }).join('')}</ul>
+    <p class="ci-note">내일로 옮겨도 마감일은 바뀌지 않고, 내일 TODAY에 기한 초과로 표시돼요.</p>
+    <div class="ci-stack">
+      <button class="btn primary" data-mv="safe">마감 있는 것 빼고 옮기기</button>
+      <button class="btn" data-mv="all">모두 내일로</button>
+      <button class="btn ghost" data-mv="cancel">취소</button>
+    </div>`, leaveCheckin, kind);
+  sheet.onclick = e => {
+    const b = e.target.closest('[data-mv]'); if (!b) return;
+    sheet.onclick = null;
+    if (b.dataset.mv === 'safe') { const rest = ids.filter(id => !withDue.includes(id)); return rest.length ? doMove(rest) : back(); }
+    if (b.dataset.mv === 'all') return doMove(ids);
+    back();
+  };
+}
+
+// 23:00 하루 복기 — d는 알림 주소의 날짜 (자정 넘어 열어도 그날 기준, "내일" = d + 1)
+function openReview(d, st = { note: null, top: undefined, newTitle: '' }) {
+  const tm = addDays(d, 1), rv = reviews[d];
+  if (st.note === null) st.note = rv?.note || '';
+  if (st.top === undefined) st.top = rv?.top_task_id || null;
+  const doneList = doneOn(d), rem = remainingOn(d);
+  const remIds = new Set(rem.map(t => t.id));
+  const cands = live().filter(t => t.status === 'active' && (t.do_date === tm || remIds.has(t.id))).sort(sortTask);
+  if (st.top && !cands.some(t => t.id === st.top)) st.top = null;
+  const redraw = () => openReview(d, st);
+  const keep = sheet.hidden ? 0 : sheet.scrollTop;
+  const remActions = `<div class="row-actions"><button class="btn" data-rv="tomorrow">${d === T() ? '내일' : md(tm)}</button><button class="btn" data-rv="wait">대기</button></div>`;
+  openSheet(`<div class="ci-head"><h2>${md(d)} (${DOW[dowOf(d)]}) 돌아보기</h2></div>
+    <p class="ci-sub">완료 ${doneList.length} · 남음 ${rem.length}</p>
+    ${doneList.length ? `<details class="more rv-done"><summary>완료한 일 ${doneList.length}</summary><ul class="rv-list">${doneList.map(t => `<li>${esc(t.title)}</li>`).join('')}</ul></details>` : ''}
+    ${rem.length ? `<section class="rv-sec"><div class="lbl">남은 일 ${rem.length}</div>
+      <div class="list ci-list">${rem.map(t => rowHTML(t, { noswipe: true, extra: remActions })).join('')}</div>
+      <button class="more-toggle" data-rv="all">남은 것 모두 ${d === T() ? '내일로' : md(tm) + '로'}</button></section>` : ''}
+    <div class="field"><label for="rvNote">오늘 한 줄</label>
+      <textarea class="textarea rv-note" id="rvNote" maxlength="300" placeholder="오늘 기억하고 싶은 것 한 줄 (선택)">${esc(st.note)}</textarea></div>
+    <div class="field"><span class="lbl">${d === T() ? '내일' : md(tm)} 가장 중요한 일</span>
+      <div class="rv-cands">${cands.map(t => `<label class="rv-cand"><input type="radio" name="rvTop" value="${t.id}" ${st.top === t.id && !st.newTitle ? 'checked' : ''}><span>${esc(t.title)}</span></label>`).join('') || `<div class="empty">${d === T() ? '내일' : md(tm)} 할 일로 잡힌 업무가 없어요.</div>`}</div>
+      <input class="input rv-new" id="rvNew" placeholder="새로 입력…" maxlength="500" value="${esc(st.newTitle)}"></div>
+    <div class="sheet-foot"><button class="btn ghost" data-close>닫기</button><span class="saved"></span><button class="btn primary" id="rvSave">저장하고 마치기</button></div>`, leaveCheckin, 'review');
+  sheet.scrollTop = keep;
+  reviewRedraw = redraw;
+  const q = sel => sheet.querySelector(sel);
+  q('#rvNote').addEventListener('input', e => { st.note = e.target.value; });
+  q('#rvNew').addEventListener('input', e => {
+    st.newTitle = e.target.value;
+    if (st.newTitle.trim()) sheet.querySelectorAll('[name=rvTop]').forEach(r => { r.checked = false; });
+  });
+  sheet.querySelectorAll('[name=rvTop]').forEach(r => r.addEventListener('change', () => { st.top = r.value; st.newTitle = ''; q('#rvNew').value = ''; }));
+  q('#rvSave').addEventListener('click', async e => {
+    const btn = e.currentTarget; btn.disabled = true;
+    const newTitle = st.newTitle.trim();
+    try {
+      unwrap(await track(db.rpc('save_daily_review', { p_date: d, p_note: st.note.trim() || null, p_top_task_id: newTitle ? null : st.top, p_new_title: newTitle || null })));
+      await loadAll();
+      closeSheet();
+      toast('하루 복기를 저장했어요');
+    } catch (err) { btn.disabled = false; saveError(err); }
+  });
+  sheet.onclick = async e => {
+    const b = e.target.closest('[data-rv]');
+    if (b?.dataset.rv === 'all') { sheet.onclick = null; return confirmMoveAll(rem.map(t => t.id), d, redraw); }
+    const row = e.target.closest('.row'); if (!row) return;
+    const id = row.dataset.id, t = byId(id); if (!t) return;
+    if (e.target.closest('.check')) { await completeTask(id, null); if (sheetKind === 'review') redraw(); return; }
+    if (b?.dataset.rv === 'tomorrow') { await patch(id, moveFields(t, tm), { rerender: false }); return redraw(); }
+    if (b?.dataset.rv === 'wait') return openWaiting(id, redraw);
+    if (b) return;
+    openDetail(id, redraw);
+  };
 }
 
 // ---------- events ----------
@@ -648,6 +920,8 @@ main.addEventListener('click', e => {
     if (k === 'triage') return openTriage();
     if (k === 'toggleLaterWeek') { ui.showLaterWeek = !ui.showLaterWeek; return render(); }
     if (k === 'signout') return signOut();
+    if (k === 'cc-add') return openAdd();
+    if (k === 'cc-close') return dismissMorning();
     const row = act.closest('.row'); const id = row?.dataset.id; if (!id) return;
     if (k === 'done') return completeTask(id, row);
     if (k === 'undone') return uncompleteTask(id).then(() => toast('완료를 취소했어요'));

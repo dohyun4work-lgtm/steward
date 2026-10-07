@@ -11,6 +11,7 @@ DH 님이 직접 할 일. 순서대로 한 번만 하면 됩니다.
 1. 왼쪽 메뉴 **SQL Editor** → New query
 2. `supabase/migrations/001_init.sql` 전체 내용을 붙여넣고 **Run**
 3. "Success. No rows returned"가 나오면 완료
+4. 이후 `002_…` 등 새 파일이 생기면 같은 방법으로 번호 순서대로 실행 (앱 업데이트 전에)
 
 ## 3. 로그인 설정 (이메일 + 비밀번호)
 1. **Authentication → Users → Add user → Create new user**

@@ -166,3 +166,34 @@ body.signed-out .nav { display: none; }
 .brand h1 { margin: 0; font-size: 28px; letter-spacing: -.01em; }
 .brand .tagline { margin: 0; color: var(--muted); font-size: 14px; font-style: italic; letter-spacing: .01em; }
 .account .brandline { display: block; margin-top: 2px; font-style: italic; }
+
+/* ---- 3단계: 체크인 ---- */
+.cc-card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin-block: 4px 10px; display: flex; flex-direction: column; gap: 10px; }
+.cc-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 4px 12px; }
+.cc-head b { font-size: 16px; }
+.cc-counts { font-size: 12px; color: var(--muted); font-family: var(--mono); }
+.cc-label { font-size: 13px; font-weight: 600; color: var(--warn); }
+.cc-actions { display: flex; gap: 8px; }
+.ci-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.ci-head h2 { margin: 0; }
+.ci-sub { margin: 6px 0 12px; font-size: 14px; color: var(--muted); }
+.ci-list { margin-bottom: 12px; }
+.ci-add { margin-top: 4px; }
+.ci-stack { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
+.ci-stack .btn { padding: 11px 12px; }
+.ci-due { list-style: none; margin: 0 0 10px; padding: 0; border: 1px solid var(--line); border-radius: 10px; }
+.ci-due li { display: flex; justify-content: space-between; gap: 10px; padding: 10px 12px; border-top: 1px solid var(--line); font-size: 14px; }
+.ci-due li:first-child { border-top: 0; }
+.ci-due li span:first-child { min-width: 0; overflow-wrap: anywhere; }
+.ci-note { font-size: 13px; color: var(--muted); margin: 0 0 14px; }
+.rv-done { margin-top: 4px; }
+.rv-list { margin: 8px 0 0; padding-left: 18px; font-size: 14px; color: var(--muted); display: flex; flex-direction: column; gap: 4px; }
+.rv-sec { margin-top: 14px; }
+.rv-sec > .lbl { display: block; font-size: 12px; font-weight: 700; color: var(--muted); letter-spacing: .04em; margin-bottom: 7px; }
+.rv-note { min-height: 64px; }
+.rv-cands { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 10px; margin-bottom: 8px; overflow: hidden; }
+.rv-cand { display: flex; align-items: center; gap: 10px; padding: 11px 12px; border-top: 1px solid var(--line); font-size: 15px; cursor: pointer; }
+.rv-cand:first-child { border-top: 0; }
+.rv-cand input { accent-color: var(--accent); width: 18px; height: 18px; flex: none; }
+.rv-cand span { min-width: 0; overflow-wrap: anywhere; }
+.rv-cands .empty { padding: 12px; }

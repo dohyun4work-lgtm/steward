@@ -21,10 +21,12 @@ q "-d postgres -c \"do \\\$\\\$ begin
   if not exists (select from pg_roles where rolname='service_role') then create role service_role nologin bypassrls; end if;
   if not exists (select from pg_roles where rolname='authenticator') then create role authenticator login noinherit; end if;
 end \\\$\\\$; grant anon, authenticated, service_role to authenticator;\""
+# 실행 중인 서버를 먼저 내려야 DB를 지울 수 있음
+pkill -f "postgrest $WORK/pgrst.conf" 2>/dev/null || true; pkill -f "node $HERE/server.js" 2>/dev/null || true
 if [ "$1" = "--reset" ] || ! q "-d taskhub -c 'select 1'" >/dev/null 2>&1; then
-  cp "$HERE/supabase-mock.sql" "$ROOT/supabase/migrations/001_init.sql" $PGDIR/ 2>/dev/null; chown postgres $PGDIR/*.sql
+  cp "$HERE/supabase-mock.sql" "$ROOT"/supabase/migrations/*.sql $PGDIR/ 2>/dev/null; chown postgres $PGDIR/*.sql
   q "-d postgres -c 'drop database if exists taskhub'"; q "-d postgres -c 'create database taskhub'"
-  q "-d taskhub -v ON_ERROR_STOP=1 -f $PGDIR/supabase-mock.sql"; q "-d taskhub -v ON_ERROR_STOP=1 -f $PGDIR/001_init.sql"
+  q "-d taskhub -v ON_ERROR_STOP=1 -f $PGDIR/supabase-mock.sql"; for m in "$ROOT"/supabase/migrations/*.sql; do q "-d taskhub -v ON_ERROR_STOP=1 -f $PGDIR/$(basename "$m")"; done
 fi
 cat > "$WORK/pgrst.conf" <<CONF
 db-uri = "postgres://authenticator@/taskhub?host=$PGDIR"
@@ -34,7 +36,6 @@ jwt-secret = "test-secret-test-secret-test-secret-32"
 server-port = 3300
 server-host = "127.0.0.1"
 CONF
-pkill -f "postgrest $WORK/pgrst.conf" 2>/dev/null || true; pkill -f "node $HERE/server.js" 2>/dev/null || true
 nohup "$PGRST" "$WORK/pgrst.conf" > "$WORK/pgrst.log" 2>&1 &
 nohup node "$HERE/server.js" > "$WORK/server.log" 2>&1 &
 sleep 2
