@@ -35,7 +35,9 @@ begin
 end $$;
 
 -- Edge Function이 받은 헤더가 맞는지 확인 (service_role 전용)
---   해시끼리 비교 → 비교 시간으로 값이 새어 나가지 않음. 값 자체는 어디에도 반환·기록하지 않음
+--   원문 값을 직접 비교하거나 반환·기록하지 않음 (SHA-256 해시끼리 비교).
+--   PostgreSQL의 bytea 비교가 일정 시간(constant-time)이라는 보장은 없음 → 비교 시간 공격 방지를 주장하지 않음.
+--   실제 방어는 값의 길이(256비트 난수)와 교체 가능성
 create or replace function public.verify_cron_secret(p_secret text)
 returns boolean
 language sql

@@ -61,6 +61,10 @@ const A = '11111111-1111-1111-1111-111111111111', B = '22222222-2222-2222-2222-2
   for (let i = 0; i < 60; i++) { try { await fetch('http://localhost:8000/'); break; } catch { await sleep(500); } }
 
   // ---------- 푸시 서명 키 (함수가 처음 필요할 때 만들어 Vault에 저장) ----------
+  // 동시에 처음 요청이 여러 개 들어와도 모두 Vault에 실제 저장된 같은 키를 씀
+  const firstKeys = await Promise.all(Array.from({ length: 6 }, () => fetch('http://localhost:8000/?vapid=public').then(r => r.json())));
+  const vaultPub = JSON.parse(sql("select decrypted_secret from vault.decrypted_secrets where name='steward_vapid'") || '{}').publicKey;
+  check('처음 요청 6개가 동시에 와도 모두 Vault에 저장된 같은 키', firstKeys.every(k => k.publicKey === vaultPub) && sql("select count(*) from vault.secrets where name='steward_vapid'") === '1');
   const k1 = await (await fetch('http://localhost:8000/?vapid=public')).json();
   const k2r = await fetch('http://localhost:8000/?vapid=public'); const k2 = await k2r.json();
   const stored = JSON.parse(sql("select decrypted_secret from vault.decrypted_secrets where name='steward_vapid'") || '{}');

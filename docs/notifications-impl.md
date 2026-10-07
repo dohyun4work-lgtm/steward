@@ -26,6 +26,10 @@
 - `notification_log` **UNIQUE (slot_id, local_date)** = 슬롯·날짜당 한 번
 - 구독 endpoint는 https만, UNIQUE
 
+## 0-1. 챗 2차 검토 반영
+- `verify_cron_secret`: "비교 시간으로 값이 새지 않는다"는 표현 삭제. 원문을 직접 비교·반환하지 않는다는 것만 명시
+- VAPID 최초 생성이 동시에 일어나도 Edge Function은 저장 후 **항상 Vault에서 다시 읽은 키 쌍**만 사용 (자기가 만든 키를 그대로 쓰지 않음). 동시 요청 테스트로 확인
+
 ## 1-1. 구독 이전 정책 (같은 기기, 다른 계정)
 
 같은 브라우저·기기의 푸시 주소(endpoint)는 계정과 상관없이 하나다. Steward는 endpoint를 UNIQUE로 두고, **다른 계정이 같은 endpoint를 등록하면 그 구독을 새 계정으로 옮긴다** (`register_push_subscription`의 `on conflict (endpoint) do update set user_id = …`).
@@ -53,7 +57,7 @@
 | `record_push_result(sub_id, ok, gone)` | Edge Function | 기기별 결과. 만료(404·410)면 비활성, 5번 연속 실패면 비활성 |
 | `finish_sending(log_id, sent, failed, error)` | Edge Function | 전부 성공 sent / 일부 partial / 전부 실패 failed(2분 뒤 재시도) |
 | `dispatch_checkins()` (004) | Cron | 선점 후 보낼 게 있을 때만 Edge Function 호출 |
-| `verify_cron_secret(secret)` (004) | Edge Function | 받은 헤더가 Vault 값과 같은지 확인 (해시 비교, 값은 반환·기록 안 함) |
+| `verify_cron_secret(secret)` (004) | Edge Function | 받은 헤더가 Vault 값과 같은지 확인 (원문을 직접 비교·반환·기록하지 않음) |
 
 ## 3. 상태·재시도 (설계 v2 7번 그대로)
 
@@ -89,7 +93,7 @@ Edge Function send-checkins (JWT 검증 끔, 대신 비밀값 헤더 확인)
 |---|---|
 | 생성 | 004 실행 시 DB 안에서 `gen_random_bytes(32)` → 64자리 16진수(256비트). 없을 때만 생성, 다시 실행해도 유지 |
 | 보관 | Vault 한 곳뿐. Edge Function 환경 변수에 복사하지 않음 → 사람·채팅·파일을 거치지 않음 |
-| 확인 | Edge Function이 `verify_cron_secret(헤더)` 호출. SHA-256 해시끼리 비교, 64자 아니면 거부 |
+| 확인 | Edge Function이 `verify_cron_secret(헤더)` 호출. 원문 대신 SHA-256 해시끼리 비교, 64자 아니면 거부. ※ PostgreSQL 비교가 일정 시간이라는 보장은 없어 타이밍 공격 방지는 주장하지 않음 (256비트 난수라 실제 위험은 매우 낮음) |
 | 로그 | `dispatch_checkins`의 경고, Edge Function 로그 모두 비밀값을 넣지 않음 (로컬 테스트로 확인) |
 | 교체 | `vault.update_secret(...)` 한 줄. 재배포 불필요, 즉시 적용. 교체 순간 진행 중이던 호출은 실패 → 3분 뒤 재시도 |
 | 참고 | pg_net은 요청을 보내기 전까지 `net.http_request_queue`에 헤더를 잠시 보관함 |

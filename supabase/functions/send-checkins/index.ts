@@ -66,8 +66,11 @@ async function loadVapid(): Promise<Vapid> {
   if (!keys?.publicKey) {
     const fresh = webpush.generateVAPIDKeys();
     await rpc('store_vapid_keys', { p_public: fresh.publicKey, p_private: fresh.privateKey });
+    // 동시에 다른 호출이 먼저 저장했을 수 있음 → 방금 만든 fresh는 버리고, 저장 성공·충돌과 관계없이
+    // Vault에 실제로 저장된 공개키·개인키 쌍을 다시 읽어서 사용
     keys = await rpc('get_vapid_keys', {});
   }
+  if (!keys?.publicKey || !keys?.privateKey) throw new Error('vapid keys unavailable');
   vapidCache = { subject: VAPID_SUBJECT, publicKey: keys.publicKey, privateKey: keys.privateKey };
   return vapidCache;
 }
