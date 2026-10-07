@@ -28,7 +28,7 @@ const diff = (a, b) => Math.round((parse(a) - parse(b)) / 86400000);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 // ---------- supabase ----------
-const clientOpts = { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, flowType: 'implicit' } };
+const clientOpts = { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false } };
 if (CFG.testAccessToken) clientOpts.accessToken = async () => CFG.testAccessToken;   // 로컬 테스트 전용
 const db = window.supabase.createClient(CFG.supabaseUrl, CFG.supabaseAnonKey, clientOpts);
 
@@ -82,9 +82,18 @@ async function loadAll() {
   ]);
   tasks = [...unwrap(open), ...unwrap(done)].map(norm);
   recentWho = unwrap(who).map(r => r.name);
+  // 아직 저장 전인 입력(제목·메모·다음 행동)은 새로 불러온 값 위에 다시 얹음
+  textTimers.forEach(e => { const t = byId(e.id); if (t) t[e.field] = e.value; });
+  lastLoadAt = Date.now();
 }
+let lastLoadAt = 0, refreshing = false;
+// 저장 중인 요청이 끝난 뒤에 불러와야 방금 바꾼 내용이 옛 값으로 덮이지 않음
+const whenIdle = () => new Promise(res => { const tick = () => pending === 0 ? res() : setTimeout(tick, 50); tick(); });
 async function refresh() {
-  try { await loadAll(); render(); } catch (e) { console.error('[taskhub] refresh', e); }
+  if (refreshing) return; refreshing = true;
+  try { await whenIdle(); await loadAll(); render(); if (!sheet.hidden && sheetKind === 'detail' && detailId) openDetail(detailId); }
+  catch (e) { console.error('[taskhub] refresh', e); }
+  finally { refreshing = false; }
 }
 
 // ---------- data: writes ----------
@@ -163,13 +172,13 @@ function saveTextLater(id, field, value) {
   t[field] = value;
   const key = id + ':' + field;
   clearTimeout(textTimers.get(key)?.timer);
-  textTimers.set(key, { id, field, timer: setTimeout(() => flushText(key), TEXT_SAVE_DELAY) });
+  textTimers.set(key, { id, field, value, timer: setTimeout(() => flushText(key), TEXT_SAVE_DELAY) });
 }
 function flushText(key) {
   const entry = textTimers.get(key); if (!entry) return;
   clearTimeout(entry.timer); textTimers.delete(key);
-  const t = byId(entry.id); if (!t) return;
-  let v = t[entry.field];
+  if (!byId(entry.id)) return;
+  let v = entry.value;
   if (entry.field === 'title' && !String(v).trim()) v = '제목 없음';
   patch(entry.id, { [entry.field]: v }, { rerender: false });
 }
@@ -306,7 +315,65 @@ function render() {
   badge.textContent = n; badge.hidden = !n;
   showSave(true);
 }
-function go(tab) { ui.tab = tab; render(); window.scrollTo(0, 0); }
+// ---------- 라우팅 (해시) ----------
+// #/today  #/today/week  #/inbox  #/waiting  #/archive  #/archive/done
+// 체크인 주소(#/checkin/…, #/review)는 3단계에서 추가
+const ROUTES = {
+  '/today':        { tab: 'today', todayMode: 'today' },
+  '/today/week':   { tab: 'today', todayMode: 'week' },
+  '/inbox':        { tab: 'inbox' },
+  '/waiting':      { tab: 'waiting' },
+  '/archive':      { tab: 'archive', archMode: 'later' },
+  '/archive/done': { tab: 'archive', archMode: 'done' },
+};
+const pathOf = () => (location.hash.replace(/^#/, '').split('?')[0] || '/today');
+function pathForUi() {
+  if (ui.tab === 'today') return ui.todayMode === 'week' ? '/today/week' : '/today';
+  if (ui.tab === 'archive') return ui.archMode === 'done' ? '/archive/done' : '/archive';
+  return '/' + ui.tab;
+}
+function applyRoute() {
+  const r = ROUTES[pathOf()];
+  if (!r) { history.replaceState(null, '', '#/today'); Object.assign(ui, ROUTES['/today']); }
+  else Object.assign(ui, r);
+  render();
+}
+// replace: 같은 화면 안의 보기 전환(오늘/이번 주, 나중에/완료)은 뒤로 가기 기록을 남기지 않음
+function navigate(path, { replace = false } = {}) {
+  if (location.hash === '#' + path) return applyRoute();
+  if (replace) { history.replaceState(null, '', '#' + path); applyRoute(); }
+  else location.hash = path;
+}
+window.addEventListener('hashchange', () => { applyRoute(); window.scrollTo(0, 0); });
+function go(tab) { navigate(tab === 'today' ? (ui.todayMode === 'week' ? '/today/week' : '/today') : tab === 'archive' ? (ui.archMode === 'done' ? '/archive/done' : '/archive') : '/' + tab); }
+function setMode(fields) { Object.assign(ui, fields); navigate(pathForUi(), { replace: true }); }
+
+// ---------- 날짜 변경 감지 ----------
+// 앱을 오래 열어둬도 자정이 지나면 오늘 기준으로 다시 그림. 앱으로 돌아올 때 서버 데이터도 다시 불러옴.
+let currentDay = T(), midnightTimer;
+function msToSeoulMidnight() {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-GB', { timeZone: TZ, hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' })
+    .formatToParts(new Date()).filter(x => x.type !== 'literal').map(x => [x.type, Number(x.value)]));
+  return (86400 - (p.hour * 3600 + p.minute * 60 + p.second)) * 1000 + 1500;
+}
+function scheduleMidnight() { clearTimeout(midnightTimer); midnightTimer = setTimeout(() => checkDay('midnight'), msToSeoulMidnight()); }
+function checkDay(reason) {
+  if (document.body.classList.contains('signed-out')) return;
+  const d = T();
+  if (d !== currentDay) { currentDay = d; onDayChange(); }
+  else if (reason === 'visible' && pending === 0 && Date.now() - lastLoadAt > 30000) refresh();
+  scheduleMidnight();
+}
+function onDayChange() {
+  if (!sheet.hidden && sheetKind !== 'detail') { closeSheet(); toast('날짜가 바뀌었어요'); }
+  flushAllText();
+  render();          // 우선 화면 날짜부터 바로 갱신
+  refresh();         // 서버 기준으로 다시 불러오기 (상세 시트는 열린 채 새 날짜로 다시 그림)
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkDay('visible'); });
+window.addEventListener('pageshow', () => checkDay('visible'));
+window.addEventListener('focus', () => checkDay('visible'));
+setInterval(() => checkDay('tick'), 60000);
 
 // ---------- toast ----------
 const toastEl = document.getElementById('toast'), toastMsg = document.getElementById('toastMsg'), toastUndo = document.getElementById('toastUndo');
@@ -319,8 +386,9 @@ toastUndo.addEventListener('click', () => { const f = undoFn; undoFn = null; toa
 
 // ---------- sheets ----------
 const scrim = document.getElementById('scrim'), sheet = document.getElementById('sheet');
-let sheetClose = null, lastFocus = null;
-function openSheet(html, onClose) {
+let sheetClose = null, lastFocus = null, sheetKind = null, detailId = null;
+function openSheet(html, onClose, kind = 'other') {
+  sheetKind = kind; if (kind !== 'detail') detailId = null;
   lastFocus = document.activeElement;
   sheet.innerHTML = `<button class="grab" data-close aria-label="닫기"><span></span></button>` + html;
   sheet.onclick = null; sheet.hidden = false; scrim.hidden = false; sheetClose = onClose || null; sheet.scrollTop = 0;
@@ -328,7 +396,7 @@ function openSheet(html, onClose) {
 function closeSheet() {
   if (sheet.hidden) return;
   flushAllText();
-  sheet.hidden = true; scrim.hidden = true; sheet.innerHTML = '';
+  sheet.hidden = true; scrim.hidden = true; sheet.innerHTML = ''; sheetKind = null; detailId = null;
   const f = sheetClose; sheetClose = null; if (f) f(); render();
   if (lastFocus && document.contains(lastFocus)) lastFocus.focus();
 }
@@ -499,8 +567,8 @@ function openTriage() {
 // Detail
 function openDetail(id) {
   const t = byId(id); if (!t) return;
-  const d = T();
   const draw = () => {
+    const d = T();
     const cur = byId(id); if (!cur) return closeSheet();
     const keep = sheet.hidden ? 0 : sheet.scrollTop;
     const st = [['inbox', '인박스'], ['active', '진행'], ['waiting', '대기'], ['later', '나중'], ['done', '완료']];
@@ -522,7 +590,8 @@ function openDetail(id) {
         <div class="field"><span class="lbl">반복</span><div class="chips" id="dRepeat">${[[null, '없음'], ['weekly', '매주'], ['monthly', '매월']].map(([k, l]) => `<button class="chip" data-rp="${k}" aria-pressed="${cur.repeat_rule === k}">${l}</button>`).join('')}</div></div>
         <div class="metaline">만든 날 ${md(seoulDate(new Date(cur.created_at)))} · 출처 ${cur.source}</div>
       </details>
-      <div class="sheet-foot"><button class="btn danger" id="dDel">삭제</button><span class="saved"></span><button class="btn primary" data-close>닫기</button></div>`);
+      <div class="sheet-foot"><button class="btn danger" id="dDel">삭제</button><span class="saved"></span><button class="btn primary" data-close>닫기</button></div>`, null, 'detail');
+    detailId = id;
     bind(cur);
     sheet.scrollTop = keep;
     showSave(true);
@@ -565,8 +634,8 @@ document.querySelector('.nav').addEventListener('click', e => {
   go(b.dataset.tab);
 });
 top.addEventListener('click', e => {
-  const m = e.target.closest('[data-mode]'); if (m) { ui.todayMode = m.dataset.mode; return render(); }
-  const a = e.target.closest('[data-arch]'); if (a) { ui.archMode = a.dataset.arch; return render(); }
+  const m = e.target.closest('[data-mode]'); if (m) return setMode({ todayMode: m.dataset.mode });
+  const a = e.target.closest('[data-arch]'); if (a) return setMode({ archMode: a.dataset.arch });
   if (e.target.closest('[data-act="triage"]')) openTriage();
 });
 
@@ -585,7 +654,7 @@ main.addEventListener('click', e => {
     if (k === 'received') { const t = byId(id); return change(id, statusFields(t, 'active'), '받음 · 오늘 할 일로 옮겼어요'); }
     if (k === 'refollow') return openRefollow(id);
   }
-  const m = e.target.closest('[data-mode]'); if (m) { ui.todayMode = m.dataset.mode; return render(); }
+  const m = e.target.closest('[data-mode]'); if (m) return setMode({ todayMode: m.dataset.mode });
   const row = e.target.closest('.row'); if (row) openDetail(row.dataset.id);
 });
 
@@ -666,7 +735,9 @@ async function startApp(session) {
   main.innerHTML = `<div class="loading">불러오는 중…</div>`;
   try { await loadAll(); }
   catch (e) { console.error(e); main.innerHTML = `<div class="empty-big"><b>불러오지 못했어요</b>연결을 확인하고 다시 열어 주세요.</div>`; return; }
-  render();
+  currentDay = T();
+  applyRoute();
+  scheduleMidnight();
 }
 
 async function boot() {
@@ -681,7 +752,7 @@ async function boot() {
 }
 
 // 테스트에서 상태 확인용 (읽기 전용)
-window.__taskhub = { get tasks() { return tasks; }, get pending() { return pending; }, refresh };
+window.__taskhub = { get tasks() { return tasks; }, get pending() { return pending; }, get day() { return currentDay; }, refresh };
 
 boot();
 })();

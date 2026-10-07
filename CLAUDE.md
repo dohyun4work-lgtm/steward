@@ -3,6 +3,9 @@
 DH의 개인 업무 허브 웹앱 **Steward**. 태그라인 "A daily rhythm for faithful work." 브랜드: 차분함·책임감·질서·신실함, 딥 네이비, S 모노그램 아이콘(`icons/`). "생각난 일을 5초 안에 기록하고, 아침에 열면 오늘 할 일이 바로 보이는" 것이 목적.
 기능 추가보다 매일 쓰기 쉬운 것이 우선.
 
+- 앱 주소: https://dohyun4work-lgtm.github.io/steward/ (GitHub Pages, main 브랜치 루트)
+- Supabase 프로젝트: `mqmcpsuaurpajsfjryon` (서울). 로그인은 이메일+비밀번호, 신규 가입 꺼짐.
+
 ## 작업 원칙
 - 확정된 UI 구조와 데이터 구조를 임의로 바꾸지 않는다. 요청하지 않은 기능은 추가하지 않는다.
 - 수정 요청은 해당 부분만 고친다.
@@ -24,16 +27,20 @@ DH의 개인 업무 허브 웹앱 **Steward**. 태그라인 "A daily rhythm for 
 - 텍스트(제목·메모·다음 행동)는 400ms 지연 저장, 시트 닫을 때·페이지 떠날 때 즉시 저장.
 - "오늘"은 항상 Asia/Seoul 기준 (`T()`), DB의 `app_today()`와 일치.
 - 상태 전환 규칙은 `statusFields()` 한 곳에.
+- 주소는 해시 라우팅 (`ROUTES`): `#/today` `#/today/week` `#/inbox` `#/waiting` `#/archive` `#/archive/done`. 탭 이동은 기록을 남기고, 같은 화면 안 보기 전환은 `replace`.
+- 날짜 변경: 자정 타이머 + 1분 간격 확인 + 앱 복귀(visibilitychange/pageshow/focus). 날짜가 바뀌면 상세 외 시트는 닫고 다시 불러옴. 앱 복귀 시 30초 넘었으면 서버에서 다시 불러옴(`refresh`는 저장 중인 요청이 끝난 뒤 실행).
 
 ## 테스트
 로컬에 PostgreSQL + PostgREST로 Supabase REST·RLS를 재현해 실제 브라우저로 검증.
+- `bash test/start-local.sh [--reset]`: 로컬 스택 시작 (PostgREST는 GitHub 릴리스에서 내려받음)
 - `test/server.js`: 앱 정적 파일 + `/rest/v1` → PostgREST 프록시 + 테스트용 config (JWT 직접 발급, 로그인 우회)
-- `test/e2e-stage1.js`: Playwright 모바일 크기 E2E, 결과를 DB에서 직접 확인
+- `test/e2e-stage1.js`: 본체 기능 E2E, 결과를 DB에서 직접 확인
+- `test/e2e-stage2.js`: 라우팅 + 자정 넘기기 (Playwright 가짜 시계)
 - 로그인은 이메일+비밀번호 (메일 발송 없음). 실제 로그인 성공은 실제 Supabase Auth에서 확인.
 
 ## 진행 단계
 1. ✅ 본체 Supabase 연결
-2. 해시 라우팅 + 날짜 변경 처리
+2. ✅ 해시 라우팅 + 날짜 변경 처리
 3. 체크인 화면 3종 (`docs/checkin-design.md`)
 4. PWA + 서비스 워커
 5. push_subscriptions / notification_log / Cron / Edge Function

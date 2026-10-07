@@ -3,8 +3,8 @@
   "version": "1.0.0",
   "description": "Steward — A daily rhythm for faithful work.",
   "scripts": {
-    "test:server": "node test/server.js",
-    "test:e2e": "node test/e2e-stage1.js"
+    "test:stack": "bash test/start-local.sh",
+    "test:e2e": "node test/e2e-stage1.js && node test/e2e-stage2.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.117.3",
