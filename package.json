@@ -1,0 +1,17 @@
+{
+  "name": "steward",
+  "version": "1.0.0",
+  "description": "Steward — A daily rhythm for faithful work.",
+  "scripts": {
+    "test:server": "node test/server.js",
+    "test:e2e": "node test/e2e-stage1.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.117.3",
+    "jsonwebtoken": "^9.0.3"
+  },
+  "devDependencies": {
+    "playwright": "^1.63.0"
+  },
+  "private": true
+}
