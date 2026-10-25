@@ -21,7 +21,7 @@ DH의 개인 업무 허브 웹앱 **Steward**. 태그라인 "A daily rhythm for 
 - `manifest.webmanifest`, `icons/` (192·512·maskable·apple-touch·badge-96)
 - `supabase/functions/send-checkins/index.ts` 발송 Edge Function (Deno). JWT 검증 끔, `x-steward-cron`을 `verify_cron_secret()`으로 확인. VAPID 키는 스스로 만들어 Vault에 저장(005), `GET ?vapid=public`으로 공개키만 제공. 비밀값·구독 주소는 로그 금지
 - 알림 설정 화면 `#/settings` (보관 탭 아래). 구독 id는 localStorage `steward.push.subscriptionId`. 로그아웃하면 이 기기 구독 해제
-- `supabase/migrations/` DB 스키마·RLS·RPC, 번호 순서대로 실행 (001 기본, 002 하루 복기). 설계: `docs/db-design.md`
+- `supabase/migrations/` DB 스키마·RLS·RPC, 번호 순서대로 실행 (001 기본, 002 하루 복기, 003~005 알림, 006 알림 제목). 설계: `docs/db-design.md`
 - 새 마이그레이션은 앱 배포 **전에** 실제 Supabase에 먼저 실행 (앱이 새 테이블을 바로 읽음)
 - `docs/` 설계 문서 (프로토타입 구조, DB 설계, 체크인 알림 설계)
 
@@ -58,3 +58,5 @@ DH의 개인 업무 허브 웹앱 **Steward**. 태그라인 "A daily rhythm for 
 6. ✅ 실제 기기 테스트 (2026-10-08): iPhone 구독 등록, 서버 발송 midday 03:20 테스트 sent·1대, 09:00 아침 알림 도착 확인
    - 남은 확인: 알림 눌러 열었을 때 `notification_log.opened_at`/`completed_at` 기록 여부 (03:20 건은 열지 않아 false)
    - 1주 사용 후 notification_log의 슬롯별 열람·완료율로 시간·ON/OFF 조정 (합의된 계획)
+7. 🔶 알림에 업무 제목 (2026-10-25 DH 결정): 006 `checkin_titles` + `send-checkins` 문구. 체크인 4종에 남은 업무 최대 3개(기한 지난 것 먼저, 24자 줄임, "외 N개"), 복기는 개수만. 006 없으면 개수만 발송. 로컬 테스트 통과(sql-stage5 50개, push 22개). **배포 대기**: 006 실행 → 함수 재배포
+8. ⏳ Google Calendar 연동 (목표: Steward 업무 → 캘린더 쓰기까지, 개인 캘린더). 설계 `docs/calendar-design.md` 검토 대기

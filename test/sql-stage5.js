@@ -10,6 +10,7 @@ const run = (q, role) => {
 const results = [];
 const check = (name, ok, detail = '') => { results.push(ok); console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? '  — ' + detail : ''}`); };
 const A = "'11111111-1111-1111-1111-111111111111'";
+const B = "'22222222-2222-2222-2222-222222222222'";
 const D = '2026-10-12';                          // 월요일
 const at = hm => `'${D} ${hm}+09'`;
 const claim = hm => run(`select count(*) from public.claim_due_checkins(${at(hm)})`);
@@ -111,6 +112,13 @@ check('앱은 발송 기록을 직접 못 고침', run(`update notification_log 
 run(`insert into tasks(user_id,title,status,do_date,due_date) values (${A},'a','active','2026-10-10','2026-10-11'),(${A},'b','active','${D}',null),(${A},'c','inbox',null,'${D}')`);
 check('알림 문구용 개수 (기한 초과·남음)', run(`select public.checkin_summary(${A},'${D}')::text`, 'svc') === '{"done": 0, "overdue": 1, "followup": 0, "remaining": 3}', run(`select public.checkin_summary(${A},'${D}')::text`, 'svc'));
 check('앱은 개수 함수 직접 실행 불가', run(`select public.checkin_summary(${A},'${D}')`, 'a').startsWith('ERR'));
+
+// 알림 제목 (006): 기한 지난 것 → 할 날짜 있는 것 → 나머지, 남음 개수와 같은 대상
+check('알림 제목: 기한 지난 것 먼저, 3개', run(`select public.checkin_titles(${A},'${D}')::text`, 'svc') === '[{"title": "a", "overdue": true}, {"title": "b", "overdue": false}, {"title": "c", "overdue": false}]', run(`select public.checkin_titles(${A},'${D}')::text`, 'svc'));
+check('알림 제목: 개수 제한·별표 우선', run(`select public.checkin_titles(${A},'${D}',1)->0->>'title'`, 'svc') === 'a' && (run(`update tasks set starred=true where title='c' and user_id=${A}`), run(`select public.checkin_titles(${A},'${D}',2)->1->>'title'`, 'svc') === 'c'));
+check('알림 제목: 다른 사용자 업무·완료·삭제·나중은 빠짐', (run(`insert into tasks(user_id,title,status,do_date) values (${B},'other','active','${D}')`), run(`update tasks set deleted_at=now() where title='b' and user_id=${A}`), run(`select public.checkin_titles(${A},'${D}',5)::text`, 'svc') === '[{"title": "a", "overdue": true}, {"title": "c", "overdue": false}]'), run(`select public.checkin_titles(${A},'${D}',5)::text`, 'svc'));
+check('알림 제목: 할 일 없으면 빈 목록', run(`select public.checkin_titles(${A},'2020-01-01')::text`, 'svc') === '[]');
+check('앱·비로그인은 제목 함수 실행 불가', run(`select public.checkin_titles(${A},'${D}')`, 'a').startsWith('ERR') && run(`select public.checkin_titles(${A},'${D}')`, 'anon').startsWith('ERR'));
 
 const pass = results.filter(Boolean).length;
 console.log(`\n${pass} / ${results.length} 통과`);

@@ -21,6 +21,7 @@ const MAX_LOGS = 100;
 type Log = { log_id: string; user_id: string; kind: string; local_date: string };
 type Summary = { overdue: number; remaining: number; done: number; followup: number };
 type Sub = { id: string; endpoint: string; p256dh: string; auth: string };
+type Item = { title: string; overdue: boolean };
 
 // ---------- DB (PostgREST, service_role) ----------
 async function db(path: string, init: RequestInit = {}) {
@@ -34,7 +35,7 @@ async function db(path: string, init: RequestInit = {}) {
 }
 const rpc = (fn: string, args: Record<string, unknown>) => db(`rpc/${fn}`, { method: 'POST', body: JSON.stringify(args) });
 
-// ---------- 알림 문구 (개수만, 업무 제목 없음) ----------
+// ---------- 알림 문구 (개수 + 남은 업무 제목 최대 3개, 2026-10-25 DH 결정. 복기는 개수만) ----------
 const COPY: Record<string, (s: Summary) => string> = {
   morning: s => `오늘 할 일 ${s.remaining}개` + (s.overdue ? ` · 기한 초과 ${s.overdue}` : ''),
   midday: s => s.remaining ? `남은 업무 ${s.remaining}개 · 지금 정리하거나 추가하세요` : '오늘 남은 업무가 없어요 · 생각난 일을 적어 두세요',
@@ -42,11 +43,22 @@ const COPY: Record<string, (s: Summary) => string> = {
   evening_final: s => s.remaining ? `남은 업무 ${s.remaining}개 · 내일로 넘기고 오늘을 마무리해요` : '오늘 마무리 완료 · 23시에 하루를 돌아봐요',
   review: s => `오늘 완료 ${s.done}개 · 하루를 1분만 돌아봐요`,
 };
-export function buildPayload(log: Log, s: Summary) {
+// 남은 업무 제목 (006). 최대 3개, 기한 지난 것 먼저. 복기 알림에는 붙이지 않음
+const TITLE_MAX = 24;
+const clip = (t: string) => { const c = [...t.trim()]; return c.length > TITLE_MAX ? c.slice(0, TITLE_MAX - 1).join('') + '…' : c.join(''); };
+export function titleLines(items: Item[], remaining: number): string[] {
+  if (!items.length) return [];
+  const lines = items.map(i => `· ${clip(i.title)}${i.overdue ? ' (기한 지남)' : ''}`);
+  if (remaining > items.length) lines.push(`외 ${remaining - items.length}개`);
+  return lines;
+}
+export function buildPayload(log: Log, s: Summary, items: Item[] = []) {
   const route = log.kind === 'review' ? '#/review' : `#/checkin/${log.kind}`;
+  const head = (COPY[log.kind] ?? COPY.midday)(s);
+  const extra = log.kind === 'review' ? [] : titleLines(items, s.remaining);
   return {
     title: 'Steward',
-    body: (COPY[log.kind] ?? COPY.midday)(s),
+    body: [head, ...extra].join('\n'),
     url: `./${route}?d=${log.local_date}&n=${log.log_id}`,
     tag: `${log.kind}-${log.local_date}`,                  // 기기에서 같은 tag는 하나로 덮어씀
   };
@@ -91,7 +103,12 @@ async function sendLog(log: Log, vapid: Vapid) {
   try {
     const summary: Summary = await rpc('checkin_summary', { p_user: log.user_id, p_date: log.local_date });
     const subs: Sub[] = await db(`push_subscriptions?select=id,endpoint,p256dh,auth&user_id=eq.${log.user_id}&disabled_at=is.null`);
-    const payload = JSON.stringify(buildPayload(log, summary));
+    let items: Item[] = [];
+    if (log.kind !== 'review' && summary.remaining > 0) {
+      // 제목을 못 불러와도(006 미실행 등) 개수 알림은 그대로 보냄
+      try { const r = await rpc('checkin_titles', { p_user: log.user_id, p_date: log.local_date, p_limit: 3 }); if (Array.isArray(r)) items = r; } catch (_) { items = []; }
+    }
+    const payload = JSON.stringify(buildPayload(log, summary, items));
     const outcomes = await Promise.all(subs.map(async sub => {
       const r = await pushOne(sub, payload, log, vapid);
       await rpc('record_push_result', { p_subscription_id: sub.id, p_ok: r === 'ok', p_gone: r === 'gone' });

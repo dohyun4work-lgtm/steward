@@ -87,9 +87,9 @@ const A = '11111111-1111-1111-1111-111111111111', B = '22222222-2222-2222-2222-2
   check('푸시 헤더: 암호화 방식·유효 시간·긴급도·topic·VAPID 서명(저장된 공개키)', okReq.headers['content-encoding'] === 'aes128gcm' && okReq.headers.ttl === '1800' && okReq.headers.urgency === 'high' && okReq.headers.topic === `evening_final${D.replaceAll('-', '')}` && okReq.headers.authorization === undefined ? false : okReq.headers.authorization.endsWith('k=' + k1.publicKey));
   check('본문은 암호화되어 있음 (평문 없음)', !okReq.body.toString('utf8').includes('Steward') && !okReq.body.toString('utf8').includes('남은'));
   const payload = JSON.parse(ece.decrypt(okReq.body, { version: 'aes128gcm', privateKey: okA.ecdh, authSecret: okA.auth }).toString('utf8'));
-  check('기기 키로 복호화한 내용: 개수만 담긴 문구', payload.title === 'Steward' && payload.body === '남은 업무 3개 · 내일로 넘기고 오늘을 마무리해요', payload.body);
+  check('기기 키로 복호화한 내용: 개수 + 남은 업무 제목 (기한 지난 것 먼저)', payload.title === 'Steward' && payload.body === '남은 업무 3개 · 내일로 넘기고 오늘을 마무리해요\n· y (기한 지남)\n· x\n· z', payload.body);
   check('복호화한 내용: 열 주소(날짜·기록 id)와 tag', payload.url === `./#/checkin/evening_final?d=${D}&n=${logA}` && payload.tag === `evening_final-${D}`, payload.url);
-  check('업무 제목은 알림에 없음', !['x', 'y', 'z'].some(t => payload.body.includes(`${t} `)) && !JSON.stringify(payload).includes('"x"'));
+  check('알림에는 제목·개수·주소만 (메모 등 다른 칸 없음)', Object.keys(payload).sort().join() === 'body,tag,title,url');
 
   // ---------- 결과 기록 ----------
   check('A: 1대 성공·1대 만료 → partial, 성공 1대', sql(`select status||'|'||devices_sent from notification_log where id='${logA}'`) === 'partial|1');
