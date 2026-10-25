@@ -1,4 +1,26 @@
-# Steward 8단계 — Google Calendar 연동 설계안 (v1, 검토 대기)
+# Steward 8단계 — Google Calendar 연동 설계안
+
+## 0. 결정 (2026-10-25): A안 먼저 — iCal 비공개 주소로 읽기만
+DH: "복잡하니까 A만 우선". 아래 1~7번(OAuth·쓰기, B안)은 보류. 나중에 B안을 할 때 이 문서에서 다시 시작.
+
+| 항목 | A안 구현 |
+|---|---|
+| 연결 | 설정 화면에 구글 캘린더 「iCal 형식의 비공개 주소」를 붙여 넣음. 구글 개발자 설정·로그인 없음 |
+| 주소 보관 | Vault `steward_ical_<user>` 한 곳. 앱에 다시 내려주지 않음, 로그에 남기지 않음 (007) |
+| 앱이 보는 것 | `calendar_feeds`: 연결 시각·마지막 확인·오류 종류만 |
+| 일정 읽기 | Edge Function `calendar-today`가 볼 때마다 주소에서 받아 그날 일정만 돌려줌. **DB 저장 없음**. 함수 안 3분 캐시 |
+| 반복 일정 | ical.js로 펼침 (매주·매년·예외로 바꾼 날·뺀 날·종일·여러 날·다른 시간대). 서울 시각 기준 |
+| 화면 | TODAY 「오늘」 보기 맨 위 「오늘 일정」(종일 → 시간순, 지난 일정은 흐리게). 앱은 5분마다만 다시 받음 |
+| 아침 알림 | 09시 알림 둘째 줄 「오늘 일정 4개 · 10:00 교역자 회의」(지금 이후 첫 일정, 없으면 종일). 실패하면 줄 없이 발송 |
+| 호출 권한 | 앱: 로그인 토큰 → Auth로 확인한 본인만. send-checkins: service_role 키 + user_id |
+| 반영 속도 | 구글 쪽 iCal 갱신이 몇 분 늦을 수 있음 |
+| 노출 | 일정 제목이 TODAY 화면과 아침 알림(잠금 화면)에 보임 |
+
+배포 순서: `docs/deploy-calendar.md`. 테스트: `test/sql-calendar.js`(22), `test/deno-calendar.ts`(13), `test/deno-morning.ts`(8), `test/e2e-calendar.js`(29).
+
+---
+
+# (보류) B안 설계 v1 — Google 로그인 + 업무 → 캘린더 쓰기
 
 목표: **Steward 업무를 개인 Google Calendar에 자동으로 올리기**(쓰기)까지. 그 과정에서 오늘 캘린더 일정을 Steward에서 보는 것(읽기)도 함께 한다.
 대상: DH 개인 Google 계정 하나. 교회 공용 캘린더는 범위 밖.

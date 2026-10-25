@@ -232,3 +232,16 @@ body.signed-out .nav { display: none; }
 .switch:checked { background: var(--accent); }
 .switch:checked::after { transform: translateX(18px); }
 @media (prefers-reduced-motion: reduce) { .switch, .switch::after { transition: none; } }
+
+/* 구글 캘린더 오늘 일정 (읽기만) */
+.cal-row { display: flex; align-items: baseline; gap: 12px; padding: 11px 14px; border-top: 1px solid var(--line); }
+.cal-row:first-child { border-top: 0; }
+.cal-time { flex: none; min-width: 52px; display: flex; flex-direction: column; line-height: 1.3; font-family: var(--mono); font-size: 14px; font-weight: 500; font-variant-numeric: tabular-nums; color: var(--accent); }
+.cal-time small { font-size: 11px; font-weight: 400; color: var(--muted); }
+.cal-title { min-width: 0; overflow-wrap: anywhere; }
+.cal-row.past .cal-time, .cal-row.past .cal-title { color: var(--muted); }
+.set-card .lbl { font-size: 12px; font-weight: 700; color: var(--muted); letter-spacing: .04em; }
+.set-note.warn { color: var(--warn); }
+.cal-help { width: 100%; }
+.cal-help summary { cursor: pointer; font-size: 14px; font-weight: 600; color: var(--accent); }
+.cal-help ol { margin: 8px 0 10px; padding-left: 20px; font-size: 14px; color: var(--muted); line-height: 1.6; }

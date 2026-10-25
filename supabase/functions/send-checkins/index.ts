@@ -35,7 +35,7 @@ async function db(path: string, init: RequestInit = {}) {
 }
 const rpc = (fn: string, args: Record<string, unknown>) => db(`rpc/${fn}`, { method: 'POST', body: JSON.stringify(args) });
 
-// ---------- 알림 문구 (개수 + 남은 업무 제목 최대 3개, 2026-10-25 DH 결정. 복기는 개수만) ----------
+// ---------- 알림 문구 (개수 + 남은 업무 제목 최대 3개, 아침은 오늘 일정 한 줄. 2026-10-25 DH 결정. 복기는 개수만) ----------
 const COPY: Record<string, (s: Summary) => string> = {
   morning: s => `오늘 할 일 ${s.remaining}개` + (s.overdue ? ` · 기한 초과 ${s.overdue}` : ''),
   midday: s => s.remaining ? `남은 업무 ${s.remaining}개 · 지금 정리하거나 추가하세요` : '오늘 남은 업무가 없어요 · 생각난 일을 적어 두세요',
@@ -52,16 +52,39 @@ export function titleLines(items: Item[], remaining: number): string[] {
   if (remaining > items.length) lines.push(`외 ${remaining - items.length}개`);
   return lines;
 }
-export function buildPayload(log: Log, s: Summary, items: Item[] = []) {
+export function buildPayload(log: Log, s: Summary, items: Item[] = [], calLine: string | null = null) {
   const route = log.kind === 'review' ? '#/review' : `#/checkin/${log.kind}`;
   const head = (COPY[log.kind] ?? COPY.midday)(s);
   const extra = log.kind === 'review' ? [] : titleLines(items, s.remaining);
   return {
     title: 'Steward',
-    body: [head, ...extra].join('\n'),
+    body: [head, ...(calLine ? [calLine] : []), ...extra].join('\n'),
     url: `./${route}?d=${log.local_date}&n=${log.log_id}`,
     tag: `${log.kind}-${log.local_date}`,                  // 기기에서 같은 tag는 하나로 덮어씀
   };
+}
+// 아침 알림의 오늘 일정 한 줄 (007, calendar-today). 연결 안 됐거나 실패하면 없이 보냄
+type CalEvent = { title: string; start: string | null; end: string | null; allDay: boolean };
+export function calendarLine(events: CalEvent[], total: number, nowHM: string): string | null {
+  if (!total || !events.length) return null;
+  const first = events.find(e => !e.allDay && e.start && e.start >= nowHM) ?? events.find(e => e.allDay) ?? events[0];
+  return `오늘 일정 ${total}개 · ${first.start && !first.allDay ? first.start + ' ' : ''}${clip(first.title)}`;
+}
+async function fetchCalendarLine(log: Log): Promise<string | null> {
+  if (log.kind !== 'morning') return null;
+  try {
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/calendar-today`, {
+      method: 'POST',
+      headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_id: log.user_id, date: log.local_date }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) { await res.body?.cancel(); return null; }
+    const r = await res.json();
+    if (!r?.connected || !Array.isArray(r.events)) return null;
+    const nowHM = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Seoul', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date());
+    return calendarLine(r.events, Number(r.total) || 0, nowHM);
+  } catch (_) { return null; }
 }
 const pushOptions = (log: Log, vapid: Vapid) => ({
   vapidDetails: vapid,
@@ -108,7 +131,8 @@ async function sendLog(log: Log, vapid: Vapid) {
       // 제목을 못 불러와도(006 미실행 등) 개수 알림은 그대로 보냄
       try { const r = await rpc('checkin_titles', { p_user: log.user_id, p_date: log.local_date, p_limit: 3 }); if (Array.isArray(r)) items = r; } catch (_) { items = []; }
     }
-    const payload = JSON.stringify(buildPayload(log, summary, items));
+    const calLine = await fetchCalendarLine(log);
+    const payload = JSON.stringify(buildPayload(log, summary, items, calLine));
     const outcomes = await Promise.all(subs.map(async sub => {
       const r = await pushOne(sub, payload, log, vapid);
       await rpc('record_push_result', { p_subscription_id: sub.id, p_ok: r === 'ok', p_gone: r === 'gone' });

@@ -20,8 +20,9 @@ DH의 개인 업무 허브 웹앱 **Steward**. 태그라인 "A daily rhythm for 
 - `sw.js` 서비스 워커: 같은 도메인 GET만, `/rest|auth|functions|storage|realtime/v1/`는 절대 가로채지 않음. 셸 파일을 바꾸면 `VERSION`도 올릴 것(새 캐시)
 - `manifest.webmanifest`, `icons/` (192·512·maskable·apple-touch·badge-96)
 - `supabase/functions/send-checkins/index.ts` 발송 Edge Function (Deno). JWT 검증 끔, `x-steward-cron`을 `verify_cron_secret()`으로 확인. VAPID 키는 스스로 만들어 Vault에 저장(005), `GET ?vapid=public`으로 공개키만 제공. 비밀값·구독 주소는 로그 금지
-- 알림 설정 화면 `#/settings` (보관 탭 아래). 구독 id는 localStorage `steward.push.subscriptionId`. 로그아웃하면 이 기기 구독 해제
-- `supabase/migrations/` DB 스키마·RLS·RPC, 번호 순서대로 실행 (001 기본, 002 하루 복기, 003~005 알림, 006 알림 제목). 설계: `docs/db-design.md`
+- `supabase/functions/calendar-today/index.ts` 구글 캘린더 iCal 읽기 (ical.js). 앱(로그인 토큰) 또는 send-checkins(service_role + user_id)만. 주소·일정 내용 로그 금지, 저장 안 함
+- 알림 설정 화면 `#/settings` (보관 탭 아래, 맨 아래 「구글 캘린더」 칸). 구독 id는 localStorage `steward.push.subscriptionId`. 로그아웃하면 이 기기 구독 해제
+- `supabase/migrations/` DB 스키마·RLS·RPC, 번호 순서대로 실행 (001 기본, 002 하루 복기, 003~005 알림, 006 알림 제목, 007 캘린더 주소). 설계: `docs/db-design.md`
 - 새 마이그레이션은 앱 배포 **전에** 실제 Supabase에 먼저 실행 (앱이 새 테이블을 바로 읽음)
 - `docs/` 설계 문서 (프로토타입 구조, DB 설계, 체크인 알림 설계)
 
@@ -44,6 +45,8 @@ DH의 개인 업무 허브 웹앱 **Steward**. 태그라인 "A daily rhythm for 
 - `test/e2e-stage2.js`: 라우팅 + 자정 넘기기 (Playwright 가짜 시계)
 - `test/sql-stage5.js` (003 45개), `test/sql-stage5-cron.js` (004, 실제 pg_cron 1.6 + `test/supabase-stubs.sql`), `test/e2e-stage5-push.js` (Edge Function을 Deno로 띄워 가짜 HTTPS 푸시 서비스로 받고 구독 키로 복호화), `test/e2e-stage5-app.js` (설정·구독·열람/완료 기록)
 - Deno: `npm i deno` 후 `DENO_DIR=/var/tmp/denotest/.deno`, 함수 폴더에서 `--node-modules-dir=none`
+- `test/sql-calendar.js`(007), `test/deno-calendar.ts`(iCal 펼치기), `test/deno-morning.ts`(아침 알림 문구), `test/e2e-calendar.js`(설정 연결·TODAY·해제, 가짜 iCal 서버. calendar-today는 8000에서 띄우고 8001로 중계)
+- DB를 새로 만든 뒤(`--reset`) 004 관련 테스트는 `sql-stage5-cron.js`를 먼저, 그 뒤 `notify pgrst, 'reload schema'`
 - `test/e2e-stage4.js`: 매니페스트·서비스 워커·오프라인·업데이트·CDP로 실제 푸시 전달·tag 중복·알림 주소 이동·설치 안내
 - 테스트 서버 재시작은 `bash test/start-local.sh` (pkill 패턴이 자기 셸을 죽일 수 있어 직접 pkill 금지)
 - `test/e2e-stage3.js`: 체크인 4종 + 복기 (시간대별 가짜 시계, 복기 중 자정 넘김 포함). 서버 RPC가 실제 날짜를 쓰므로 테스트 날짜는 `app_today()` 기준
@@ -59,4 +62,5 @@ DH의 개인 업무 허브 웹앱 **Steward**. 태그라인 "A daily rhythm for 
    - 남은 확인: 알림 눌러 열었을 때 `notification_log.opened_at`/`completed_at` 기록 여부 (03:20 건은 열지 않아 false)
    - 1주 사용 후 notification_log의 슬롯별 열람·완료율로 시간·ON/OFF 조정 (합의된 계획)
 7. 🔶 알림에 업무 제목 (2026-10-25 DH 결정): 006 `checkin_titles` + `send-checkins` 문구. 체크인 4종에 남은 업무 최대 3개(기한 지난 것 먼저, 24자 줄임, "외 N개"), 복기는 개수만. 006 없으면 개수만 발송. 로컬 테스트 통과(sql-stage5 50개, push 22개). **배포 대기**: 006 실행 → 함수 재배포
-8. ⏳ Google Calendar 연동 (목표: Steward 업무 → 캘린더 쓰기까지, 개인 캘린더). 설계 `docs/calendar-design.md` 검토 대기
+8. 🔶 Google Calendar 오늘 일정 (A안, 2026-10-25): iCal 비공개 주소 → Vault(007), `calendar-today` 함수(읽기만, 저장 없음), TODAY 「오늘 일정」, 설정 「구글 캘린더」, 아침 알림 일정 한 줄. 로컬 테스트 통과. **배포 대기**: `docs/deploy-calendar.md`
+   - B안(OAuth로 업무 → 캘린더 쓰기)은 보류. 설계 `docs/calendar-design.md` 아래쪽

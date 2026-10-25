@@ -256,6 +256,8 @@ function renderToday() {
   let html = (ui.morningCard && ui.todayMode === 'today') ? morningCardHTML() : '';
   html += n ? `<button class="banner" data-act="triage"><span>인박스 ${n}개 정리하기</span><span aria-hidden="true">›</span></button>` : '';
   if (ui.todayMode === 'today') {
+    html += calendarHTML();
+    if (calStale()) loadCalendar();
     const o = overdue(), d = todayList(), f = followUps();
     html += sec('기한 초과', o, {}, 'danger') + sec('오늘', d) + sec('확인 필요', f, { followup: true, subWho: true, waiting: true, noswipe: true });
     if (!o.length && !d.length && !f.length) html += `<div class="empty-big"><b>오늘 할 일 없음</b><button class="more-toggle" data-mode="week">이번 주 보기 ›</button></div>`;
@@ -908,12 +910,50 @@ function openReview(d, st = { note: null, top: undefined, newTitle: '' }) {
   };
 }
 
+// ---------- 구글 캘린더 오늘 일정 (읽기만, 007 · calendar-today) ----------
+// status: unknown(아직 모름·준비 안 됨) | off(연결 안 함) | on(연결됨). 일정은 화면에만 두고 저장하지 않음
+const CAL_FRESH_MS = 5 * 60_000;
+const cal = { status: 'unknown', events: [], total: 0, date: null, at: 0, loading: false, error: false };
+const calStale = () => !cal.loading && (cal.date !== T() || Date.now() - cal.at > CAL_FRESH_MS);
+const nowHM = () => new Intl.DateTimeFormat('en-GB', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date());
+async function loadCalendar() {
+  if (cal.loading) return cal; cal.loading = true;
+  const date = T();
+  try {
+    const { data, error } = await db.functions.invoke('calendar-today', { body: { date } });
+    if (error) throw error;
+    Object.assign(cal, { status: data?.connected ? 'on' : 'off', events: data?.events || [], total: data?.total || 0, error: false });
+  } catch (e) {
+    const code = e?.context?.status;
+    if (code === 502) Object.assign(cal, { status: 'on', error: true });   // 연결은 됐는데 Google에서 못 읽음
+    else if (cal.status !== 'on') cal.status = 'unknown';                 // 함수가 아직 없거나 오프라인 → 조용히 숨김
+    else cal.error = true;
+    if (code !== 502) console.warn('[taskhub] calendar', code || e?.message);
+  }
+  Object.assign(cal, { date, at: Date.now(), loading: false });
+  if (ui.tab === 'today' && ui.todayMode === 'today') render();
+  return cal;
+}
+function calendarHTML() {
+  if (cal.status !== 'on' || cal.date !== T()) return '';
+  if (!cal.events.length) return cal.error ? `<section class="sec"><h2 class="sec-h">오늘 일정</h2><div class="list"><div class="empty">일정을 불러오지 못했어요</div></div></section>` : '';
+  const now = nowHM();
+  const rows = cal.events.map(e => {
+    const past = !e.allDay && (e.end ? e.end <= now : (e.start && e.start < now));
+    const time = e.allDay ? '종일' : e.start ? `${esc(e.start)}${e.end ? `<small>${esc(e.end)}</small>` : ''}` : `<small>~${esc(e.end || '')}</small>`;
+    return `<div class="cal-row ${past ? 'past' : ''}"><span class="cal-time">${time}</span><span class="cal-title">${esc(e.title)}</span></div>`;
+  }).join('');
+  const more = cal.total > cal.events.length ? `<div class="empty">외 ${cal.total - cal.events.length}개</div>` : '';
+  return `<section class="sec"><h2 class="sec-h">오늘 일정 <span class="n">${cal.total}</span></h2><div class="list">${rows}${more}</div></section>`;
+}
+const CAL_URL_RE = /^https:\/\/calendar\.google\.com\/calendar\/ical\/[^/?#\s]+\/private-[A-Za-z0-9]{16,}\/basic\.ics$/;
+
 // ---------- 알림 설정 (#/settings) · 기기 구독 ----------
 const KIND_LABEL = { morning: '아침 · 오늘 할 일', midday: '중간 체크', evening: '저녁 재조정', evening_final: '오늘 마무리', review: '하루 복기' };
 const DAY_CHIPS = [[1, '월'], [2, '화'], [3, '수'], [4, '목'], [5, '금'], [6, '토'], [0, '일']];
 const SUB_KEY = 'steward.push.subscriptionId';
 const store = { get: k => { try { return localStorage.getItem(k); } catch (_) { return null; } }, set: (k, v) => { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch (_) {} } };
-const settings = { loaded: false, loading: false, slots: [], prefs: null, devices: [], device: 'unknown', busy: false, openSlot: null };
+const settings = { loaded: false, loading: false, slots: [], prefs: null, devices: [], device: 'unknown', busy: false, openSlot: null, calendar: undefined, calDraft: '', calBusy: false };
 const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
 const deviceLabel = () => /iPhone/.test(navigator.userAgent) ? 'iPhone' : /iPad/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1) ? 'iPad'
   : /Android/.test(navigator.userAgent) ? 'Android' : /Mac/.test(navigator.platform) ? 'Mac' : /Win/.test(navigator.platform) ? 'Windows PC' : '이 기기';
@@ -986,6 +1026,8 @@ async function loadSettings() {
     settings.prefs = unwrap(prefs) || { enabled: true };
     settings.devices = unwrap(devices);
     settings.device = await detectDevice();
+    const feed = await db.from('calendar_feeds').select('connected_at,last_ok_at,last_error,last_error_at').maybeSingle();
+    settings.calendar = feed.error ? undefined : (feed.data || null);   // undefined: 준비 안 됨(숨김) · null: 연결 안 함
     settings.loaded = true;
   } catch (e) { console.error('[taskhub] settings', e); settings.error = true; }
   finally { settings.loading = false; }
@@ -1050,7 +1092,32 @@ function renderSettings() {
           <div class="chips">${DAY_CHIPS.map(([n, l]) => `<button class="chip" data-set="slot-day" data-day="${n}" aria-pressed="${sl.weekdays.includes(n)}">${l}</button>`).join('')}</div>
         </div>
       </details>`).join('')}</div>
-      <p class="foot-note">시간은 5분 단위, 23:35까지. 바꾸면 바로 저장돼요.</p></section>`;
+      <p class="foot-note">시간은 5분 단위, 23:35까지. 바꾸면 바로 저장돼요.</p></section>
+    ${calendarSettingsHTML()}`;
+}
+function calendarSettingsHTML() {
+  const c = settings.calendar;
+  if (c === undefined) return '';
+  const busy = settings.calBusy ? 'disabled' : '';
+  if (!c) return `<section class="set-sec"><h2 class="sec-h">구글 캘린더</h2><div class="set-card">
+      <p class="set-note">구글 캘린더의 오늘 일정을 <b>오늘 화면</b>과 <b>아침 알림</b>에 보여 드려요. 일정은 읽기만 하고, Steward에 저장하지 않아요.</p>
+      <label class="lbl" for="calUrl">iCal 형식의 비공개 주소</label>
+      <input class="input" id="calUrl" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://calendar.google.com/calendar/ical/…/basic.ics" value="${esc(settings.calDraft)}">
+      <button class="btn primary" data-set="cal-save" ${busy}>연결하기</button>
+      <details class="cal-help"><summary>비공개 주소 찾는 법</summary><ol>
+        <li>컴퓨터에서 구글 캘린더(calendar.google.com)를 열어 주세요. 휴대폰 앱에서는 이 주소가 보이지 않아요.</li>
+        <li>왼쪽 「내 캘린더」에서 내 캘린더 이름 옆 ⋮ → 「설정 및 공유」를 눌러 주세요.</li>
+        <li>아래쪽 「캘린더 통합」에 있는 「iCal 형식의 비공개 주소」를 복사해 주세요.</li>
+        <li>여기에 붙여 넣고 「연결하기」를 눌러 주세요. 컴퓨터에서 Steward를 열어 연결해도 휴대폰에 함께 적용돼요.</li>
+      </ol><p class="set-note">이 주소를 아는 사람은 누구나 내 일정을 볼 수 있어요. 다른 곳에 공유하지 마세요. Steward는 이 주소를 서버의 비밀 보관함에만 두고, 화면에 다시 보여 주지 않아요.</p></details>
+    </div></section>`;
+  const checked = c.last_ok_at ? `마지막 확인 ${md(seoulDate(new Date(c.last_ok_at)))} ${new Intl.DateTimeFormat('en-GB', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(c.last_ok_at))}` : '아직 일정을 불러오기 전이에요';
+  const err = c.last_error && (!c.last_ok_at || c.last_error_at > c.last_ok_at)
+    ? `<p class="set-note warn">일정을 불러오지 못했어요. 구글 캘린더에서 비공개 주소를 재설정했다면, 연결을 해제한 뒤 새 주소로 다시 연결해 주세요.</p>` : '';
+  return `<section class="set-sec"><h2 class="sec-h">구글 캘린더</h2><div class="set-card">
+      <p class="set-note"><b>연결되어 있어요</b><br>${checked}</p>${err}
+      <div class="set-btns"><button class="btn" data-set="cal-test" ${busy}>지금 불러오기</button><button class="btn ghost danger" data-set="cal-off" ${busy}>연결 해제</button></div>
+    </div></section>`;
 }
 
 // 설정 화면 입력 처리
@@ -1059,6 +1126,7 @@ main.addEventListener('toggle', e => {
   if (ui.tab !== 'settings' || !e.target.matches?.('.set-slot')) return;
   if (e.target.open) settings.openSlot = e.target.dataset.id; else if (settings.openSlot === e.target.dataset.id) settings.openSlot = null;
 }, true);
+main.addEventListener('input', e => { if (ui.tab === 'settings' && e.target.id === 'calUrl') settings.calDraft = e.target.value; });
 main.addEventListener('change', e => {
   if (ui.tab !== 'settings') return;
   if (e.target.id === 'setAll') return setPrefs(e.target.checked);
@@ -1092,11 +1160,34 @@ main.addEventListener('click', async e => {
     const reg = await navigator.serviceWorker.ready;
     return reg.showNotification('Steward', { body: '남은 업무 3개 · 오늘 안에 할 것만 남겨요', tag: 'steward-preview', icon: './icons/icon-192.png', badge: './icons/badge-96.png', data: { url: './#/today' } });
   }
+  if (k === 'cal-save' || k === 'cal-test' || k === 'cal-off') return calendarAction(k);
   if (k === 'dev-del') {
     try { unwrap(await track(db.rpc('remove_push_subscription', { p_id: b.dataset.id }))); settings.devices = settings.devices.filter(d => d.id !== b.dataset.id); render(); toast('기기를 삭제했어요'); }
     catch (err) { saveError(err); }
   }
 });
+
+async function calendarAction(k) {
+  if (k === 'cal-save') {
+    const url = (document.getElementById('calUrl')?.value || settings.calDraft).trim();
+    if (!url) return toast('비공개 주소를 붙여 넣어 주세요');
+    if (/\/public\/basic\.ics$/.test(url)) return toast('「공개 주소」가 아니라 「비공개 주소」를 붙여 넣어 주세요');
+    if (!CAL_URL_RE.test(url)) return toast('구글 캘린더의 「iCal 형식의 비공개 주소」인지 확인해 주세요');
+  }
+  settings.calBusy = true; render();
+  try {
+    if (k === 'cal-save') { unwrap(await track(db.rpc('set_calendar_feed', { p_url: (document.getElementById('calUrl')?.value || settings.calDraft).trim() }))); settings.calDraft = ''; }
+    if (k === 'cal-off') { unwrap(await track(db.rpc('remove_calendar_feed'))); Object.assign(cal, { status: 'off', events: [], total: 0, error: false, at: Date.now(), date: T() }); toast('캘린더 연결을 해제했어요'); }
+    else {
+      cal.at = 0; await loadCalendar();
+      if (cal.status === 'on' && !cal.error) toast(k === 'cal-save' ? `연결했어요 · 오늘 일정 ${cal.total}개` : `오늘 일정 ${cal.total}개를 불러왔어요`);
+      else toast(k === 'cal-save' ? '연결했지만 일정을 불러오지 못했어요 · 주소를 다시 확인해 주세요' : '일정을 불러오지 못했어요');
+    }
+  } catch (err) {
+    if (err?.hint === 'private_ical_only') toast('구글 캘린더의 「iCal 형식의 비공개 주소」인지 확인해 주세요'); else saveError(err);
+  }
+  settings.calBusy = false; settings.loaded = false; return loadSettings();
+}
 
 // ---------- events ----------
 sheet.addEventListener('click', e => { if (e.target.closest('[data-close]')) closeSheet(); });
@@ -1201,6 +1292,7 @@ async function signOut() {
   await unsubscribeThisDevice().catch(() => {});   // 로그아웃하면 이 기기 알림도 끔 (구독 이전 정책: docs/notifications-impl.md 1-1)
   if (!CFG.testAccessToken) await db.auth.signOut();   // 로컬 테스트는 고정 토큰이라 로그아웃 호출 없음
   tasks = []; recentWho = [];
+  Object.assign(cal, { status: 'unknown', events: [], total: 0, date: null, at: 0, error: false });
   renderLogin();
 }
 let started = false;

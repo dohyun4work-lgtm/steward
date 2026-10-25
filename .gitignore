@@ -1,2 +1,3 @@
 node_modules/
 test/stage1-results.json
+deno.lock

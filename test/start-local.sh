@@ -24,9 +24,9 @@ end \\\$\\\$; grant anon, authenticated, service_role to authenticator;\""
 # 실행 중인 서버를 먼저 내려야 DB를 지울 수 있음
 pkill -f "postgrest $WORK/pgrst.conf" 2>/dev/null || true; pkill -f "node $HERE/server.js" 2>/dev/null || true
 if [ "$1" = "--reset" ] || ! q "-d taskhub -c 'select 1'" >/dev/null 2>&1; then
-  cp "$HERE/supabase-mock.sql" "$ROOT"/supabase/migrations/*.sql $PGDIR/ 2>/dev/null; chown postgres $PGDIR/*.sql
-  q "-d postgres -c 'drop database if exists taskhub'"; q "-d postgres -c 'create database taskhub'"
-  q "-d taskhub -v ON_ERROR_STOP=1 -f $PGDIR/supabase-mock.sql"; for m in "$ROOT"/supabase/migrations/*.sql; do case "$m" in *_cron.sql) continue;; esac; q "-d taskhub -v ON_ERROR_STOP=1 -f $PGDIR/$(basename "$m")"; done
+  cp "$HERE/supabase-mock.sql" "$HERE/supabase-stubs.sql" "$ROOT"/supabase/migrations/*.sql $PGDIR/ 2>/dev/null; chown postgres $PGDIR/*.sql
+  q "-d postgres -c 'drop database if exists taskhub with (force)'"; q "-d postgres -c 'create database taskhub'"
+  q "-d taskhub -v ON_ERROR_STOP=1 -f $PGDIR/supabase-mock.sql"; q "-d taskhub -v ON_ERROR_STOP=1 -f $PGDIR/supabase-stubs.sql"; for m in "$ROOT"/supabase/migrations/*.sql; do case "$m" in *_cron.sql) continue;; esac; q "-d taskhub -v ON_ERROR_STOP=1 -f $PGDIR/$(basename "$m")"; done
 fi
 cat > "$WORK/pgrst.conf" <<CONF
 db-uri = "postgres://authenticator@/taskhub?host=$PGDIR"
